@@ -2,10 +2,6 @@
   <img src="assets/logo.png" alt="FractalTree" width="400">
 </p>
 
-# Fractal Tree (Bε-tree)
-
-## What Is a Fractal Tree?
-
 A **fractal tree** (formally a **Bε-tree**, pronounced "B-epsilon tree") is a write-optimized search tree used in real databases like TokuDB (now PerconaFT), and studied extensively in the academic storage systems literature.
 
 The core insight: **every internal node carries a message buffer**. Instead of immediately propagating a write all the way down to a leaf, you *park* the write operation as a message in the nearest ancestor's buffer. When a buffer fills up, you **flush** it one level down. This batching amortizes the cost of random I/O across many writes.
