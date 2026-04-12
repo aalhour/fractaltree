@@ -76,14 +76,16 @@ func BenchmarkGet(b *testing.B) {
 
 func BenchmarkDelete(b *testing.B) {
 	const n = 100_000
-	b.ReportAllocs()
 	for range b.N {
-		t := buildBenchTree(b)
+		b.StopTimer()
+		t, _ := New[int, int]()
+		for i := range n {
+			t.Put(i, i)
+		}
 		b.StartTimer()
 		for i := range n {
 			t.Delete(i)
 		}
-		b.StopTimer()
 	}
 }
 

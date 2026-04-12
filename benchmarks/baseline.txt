@@ -1,0 +1,72 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/aalhour/fractaltree
+cpu: Apple M2 Max
+BenchmarkPut/Sequential/1000-12         	   36271	     32799 ns/op	   65792 B/op	       6 allocs/op
+BenchmarkPut/Sequential/1000-12         	   37210	     32924 ns/op	   65792 B/op	       6 allocs/op
+BenchmarkPut/Sequential/1000-12         	   36942	     32740 ns/op	   65792 B/op	       6 allocs/op
+BenchmarkPut/Random/1000-12             	   10000	    114388 ns/op	   65792 B/op	       6 allocs/op
+BenchmarkPut/Random/1000-12             	   10000	    112987 ns/op	   65792 B/op	       6 allocs/op
+BenchmarkPut/Random/1000-12             	   10000	    113214 ns/op	   65792 B/op	       6 allocs/op
+BenchmarkPut/Sequential/10000-12        	    1100	   1070165 ns/op	 1874116 B/op	    1388 allocs/op
+BenchmarkPut/Sequential/10000-12        	    1105	   1070262 ns/op	 1874116 B/op	    1388 allocs/op
+BenchmarkPut/Sequential/10000-12        	    1105	   1063834 ns/op	 1874116 B/op	    1388 allocs/op
+BenchmarkPut/Random/10000-12            	     225	   5237295 ns/op	 2807031 B/op	    3192 allocs/op
+BenchmarkPut/Random/10000-12            	     223	   5264213 ns/op	 2818840 B/op	    3203 allocs/op
+BenchmarkPut/Random/10000-12            	     228	   5277951 ns/op	 2811625 B/op	    3193 allocs/op
+BenchmarkPut/Sequential/100000-12       	      69	  17078878 ns/op	29762961 B/op	   22556 allocs/op
+BenchmarkPut/Sequential/100000-12       	      69	  16988761 ns/op	29762962 B/op	   22556 allocs/op
+BenchmarkPut/Sequential/100000-12       	      72	  17167176 ns/op	29762953 B/op	   22556 allocs/op
+BenchmarkPut/Random/100000-12           	       9	 124209755 ns/op	177429784 B/op	  679026 allocs/op
+BenchmarkPut/Random/100000-12           	       9	 123435472 ns/op	178013937 B/op	  681762 allocs/op
+BenchmarkPut/Random/100000-12           	       9	 123646130 ns/op	178703616 B/op	  685248 allocs/op
+BenchmarkPut/Sequential/1000000-12      	       6	 197759382 ns/op	430702994 B/op	  353974 allocs/op
+BenchmarkPut/Sequential/1000000-12      	       6	 198429118 ns/op	430702882 B/op	  353973 allocs/op
+BenchmarkPut/Sequential/1000000-12      	       6	 197873500 ns/op	430702901 B/op	  353973 allocs/op
+BenchmarkPut/Random/1000000-12          	       1	3022036916 ns/op	5376481008 B/op	11542181 allocs/op
+BenchmarkPut/Random/1000000-12          	       1	3524973709 ns/op	6047865552 B/op	11730464 allocs/op
+BenchmarkPut/Random/1000000-12          	       1	3336601500 ns/op	5799296464 B/op	11640683 allocs/op
+BenchmarkGet/Hit-12                     	      66	  17918682 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Hit-12                     	      66	  17850934 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Hit-12                     	      68	  17887167 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Miss-12                    	     133	   8902162 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Miss-12                    	     134	   8936185 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Miss-12                    	     133	   9034139 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDelete-12                      	      26	  43592338 ns/op	33547628 B/op	   32992 allocs/op
+BenchmarkDelete-12                      	      26	  44643572 ns/op	33547602 B/op	   32992 allocs/op
+BenchmarkDelete-12                      	      26	  43029824 ns/op	33547598 B/op	   32992 allocs/op
+BenchmarkRange/10-12                    	    4704	    254667 ns/op	     480 B/op	       9 allocs/op
+BenchmarkRange/10-12                    	    4723	    255216 ns/op	     480 B/op	       9 allocs/op
+BenchmarkRange/10-12                    	    4738	    254737 ns/op	     480 B/op	       9 allocs/op
+BenchmarkRange/100-12                   	    4522	    266732 ns/op	    3904 B/op	      12 allocs/op
+BenchmarkRange/100-12                   	    4512	    271877 ns/op	    3904 B/op	      12 allocs/op
+BenchmarkRange/100-12                   	    4443	    271829 ns/op	    3904 B/op	      12 allocs/op
+BenchmarkRange/1000-12                  	    3096	    390739 ns/op	   41664 B/op	      16 allocs/op
+BenchmarkRange/1000-12                  	    3082	    385086 ns/op	   41664 B/op	      16 allocs/op
+BenchmarkRange/1000-12                  	    3081	    390520 ns/op	   41664 B/op	      16 allocs/op
+BenchmarkRange/10000-12                 	     772	   1543471 ns/op	  521536 B/op	      23 allocs/op
+BenchmarkRange/10000-12                 	     772	   1547377 ns/op	  521536 B/op	      23 allocs/op
+BenchmarkRange/10000-12                 	     774	   1546538 ns/op	  521536 B/op	      23 allocs/op
+BenchmarkMixed-12                       	      21	  54428552 ns/op	79420419 B/op	  382606 allocs/op
+BenchmarkMixed-12                       	      20	  54448917 ns/op	79119288 B/op	  381037 allocs/op
+BenchmarkMixed-12                       	      21	  53591397 ns/op	79168496 B/op	  381335 allocs/op
+BenchmarkUpsert-12                      	    2503	    481060 ns/op	  145792 B/op	   10006 allocs/op
+BenchmarkUpsert-12                      	    2508	    478248 ns/op	  145792 B/op	   10006 allocs/op
+BenchmarkUpsert-12                      	    2508	    475426 ns/op	  145792 B/op	   10006 allocs/op
+PASS
+ok  	github.com/aalhour/fractaltree	81.468s
+?   	github.com/aalhour/fractaltree/examples/basic	[no test files]
+?   	github.com/aalhour/fractaltree/examples/bulkimport	[no test files]
+?   	github.com/aalhour/fractaltree/examples/comparator	[no test files]
+?   	github.com/aalhour/fractaltree/examples/concurrent	[no test files]
+?   	github.com/aalhour/fractaltree/examples/disktree-binary	[no test files]
+?   	github.com/aalhour/fractaltree/examples/disktree-gob	[no test files]
+?   	github.com/aalhour/fractaltree/examples/disktree-varint	[no test files]
+?   	github.com/aalhour/fractaltree/examples/eviction	[no test files]
+?   	github.com/aalhour/fractaltree/examples/leaderboard	[no test files]
+?   	github.com/aalhour/fractaltree/examples/mergejoin	[no test files]
+?   	github.com/aalhour/fractaltree/examples/prefixscan	[no test files]
+?   	github.com/aalhour/fractaltree/examples/range	[no test files]
+?   	github.com/aalhour/fractaltree/examples/ratelimiter	[no test files]
+?   	github.com/aalhour/fractaltree/examples/timeseries	[no test files]
+?   	github.com/aalhour/fractaltree/examples/upsert	[no test files]
