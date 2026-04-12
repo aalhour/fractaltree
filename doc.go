@@ -9,7 +9,10 @@
 //
 // For keys that satisfy [cmp.Ordered] (int, string, float64, ...):
 //
-//	t := fractaltree.New[string, int]()
+//	t, err := fractaltree.New[string, int]()
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
 //	t.Put("alice", 42)
 //	v, ok := t.Get("alice") // v=42, ok=true
 //
@@ -20,7 +23,7 @@
 //	    ID     int64
 //	}
 //
-//	t := fractaltree.NewWithCompare[TenantKey, string](func(a, b TenantKey) int {
+//	t, err := fractaltree.NewWithCompare[TenantKey, string](func(a, b TenantKey) int {
 //	    if c := cmp.Compare(a.Tenant, b.Tenant); c != 0 {
 //	        return c
 //	    }
