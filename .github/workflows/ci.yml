@@ -7,7 +7,7 @@ on:
   push:
     branches: [ "main", "*" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "main", "*" ]
 
 jobs:
   build_and_test:
@@ -30,7 +30,7 @@ jobs:
       run: make clean fmt build
 
     - name: Lint
-      run: make lint
+      run: make fmt-check lint
       
     - name: Test
       run: make test
