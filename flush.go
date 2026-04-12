@@ -53,13 +53,27 @@ func (t *BETree[K, V]) flushNode(n *node[K, V]) {
 
 // applyToLeaf applies a batch of messages to a leaf node.
 // Messages are applied in order so that later messages override earlier ones.
+//
+// Size correction for MsgPut: putLocked uses existsInLeaf (which skips buffer
+// scans) to decide whether to increment t.size. Two cases need correction here:
+//   - counted=true but leafInsert says overwrite → two MsgPut for the same key
+//     were in flight; the earlier one created the entry, this one overwrites → size--.
+//   - counted=false but leafInsert says new → a pending MsgDelete (from an eager
+//     Delete call that already decremented size) removed the key before this
+//     MsgPut re-creates it → size++.
 func (t *BETree[K, V]) applyToLeaf(leaf *node[K, V], msgs []Message[K, V]) {
 	for i := range msgs {
 		switch msgs[i].Kind {
 		case MsgPut:
-			leaf.leafInsert(msgs[i].Key, msgs[i].Value, t.cmp)
+			newKey := leaf.leafInsert(msgs[i].Key, msgs[i].Value, t.cmp)
+			if newKey && !msgs[i].counted {
+				t.size++
+			} else if !newKey && msgs[i].counted {
+				t.size--
+			}
 		case MsgDelete:
 			leaf.leafDelete(msgs[i].Key, t.cmp)
+			t.pendingDeletes--
 		}
 	}
 }

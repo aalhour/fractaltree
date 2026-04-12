@@ -33,4 +33,8 @@ type Message[K any, V any] struct {
 	Value V
 	// Fn is the upsert function for MsgUpsert. Nil for other kinds.
 	Fn UpsertFn[V]
+
+	// counted tracks whether t.size was incremented when this MsgPut was buffered.
+	// Used by applyToLeaf to correct size for buffer-duplicate overwrites.
+	counted bool
 }

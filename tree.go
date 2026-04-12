@@ -61,12 +61,13 @@ type Tree[K any, V any] interface {
 
 // BETree is an in-memory B-epsilon-tree. It is safe for concurrent use.
 type BETree[K any, V any] struct {
-	root   *node[K, V]
-	cmp    func(K, K) int
-	params treeParams
-	size   int
-	closed bool
-	mu     sync.RWMutex
+	root           *node[K, V]
+	cmp            func(K, K) int
+	params         treeParams
+	size           int
+	pendingDeletes int // count of buffered MsgDelete not yet applied to leaves
+	closed         bool
+	mu             sync.RWMutex
 }
 
 // New creates a BETree for keys that satisfy [cmp.Ordered].
@@ -101,11 +102,13 @@ func NewWithCompare[K any, V any](compare func(K, K) int, opts ...Option) (*BETr
 func (t *BETree[K, V]) Put(key K, value V) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.putLocked(key, value)
+	t.putLocked(key, value, false)
 }
 
 // putLocked is the lock-free core of Put. Caller must hold t.mu.
-func (t *BETree[K, V]) putLocked(key K, value V) {
+// When knownNew is true the caller has already verified the key does not exist
+// and the leaf check is skipped.
+func (t *BETree[K, V]) putLocked(key K, value V, knownNew bool) {
 	if t.root.leaf {
 		if t.root.leafInsert(key, value, t.cmp) {
 			t.size++
@@ -116,17 +119,47 @@ func (t *BETree[K, V]) putLocked(key K, value V) {
 		return
 	}
 
-	// For internal root, check existence to track size accurately.
-	if _, exists := t.getFromNode(t.root, key); !exists {
+	// Fast path (no pending deletes): check only the leaves — skips the
+	// expensive O(bufferCap) linear buffer scan at each internal node.
+	// Duplicate-key messages still in buffers are corrected in applyToLeaf
+	// via the counted flag.
+	//
+	// Slow path (pending deletes in buffers): fall back to full getFromNode
+	// because a buffered MsgDelete may have logically removed a key that
+	// existsInLeaf would still see in the leaf.
+	var isNew bool
+	if knownNew {
+		isNew = true
+	} else if t.pendingDeletes > 0 {
+		_, exists := t.getFromNode(t.root, key)
+		isNew = !exists
+	} else {
+		isNew = !t.existsInLeaf(t.root, key)
+	}
+	if isNew {
 		t.size++
 	}
-	t.root.buffer = append(t.root.buffer, Message[K, V]{Kind: MsgPut, Key: key, Value: value})
+
+	t.root.buffer = append(t.root.buffer, Message[K, V]{Kind: MsgPut, Key: key, Value: value, counted: isNew})
 	if len(t.root.buffer) > t.params.bufferCap {
 		t.flushNode(t.root)
 		if len(t.root.children) > t.params.fanout {
 			t.splitRoot()
 		}
 	}
+}
+
+// existsInLeaf traverses to the leaf that would hold key, checking only the
+// leaf's sorted keys via binary search. It skips all intermediate buffer scans,
+// making it O(depth × log(fanout) + log(leafCap)) instead of the
+// O(depth × bufferCap + log(leafCap)) cost of getFromNode.
+func (t *BETree[K, V]) existsInLeaf(n *node[K, V], key K) bool {
+	if n.leaf {
+		_, found := n.leafSearch(key, t.cmp)
+		return found
+	}
+	childIdx := n.findChildIndex(key, t.cmp)
+	return t.existsInLeaf(n.children[childIdx], key)
 }
 
 // Get returns the value for key and true, or the zero value and false.
@@ -188,6 +221,7 @@ func (t *BETree[K, V]) deleteLocked(key K) bool {
 		return false
 	}
 	t.size--
+	t.pendingDeletes++
 	t.root.buffer = append(t.root.buffer, Message[K, V]{Kind: MsgDelete, Key: key})
 	if len(t.root.buffer) > t.params.bufferCap {
 		t.flushNode(t.root)
@@ -217,6 +251,7 @@ func (t *BETree[K, V]) Clear() {
 	defer t.mu.Unlock()
 	t.root = newLeaf[K, V](t.params.leafCap)
 	t.size = 0
+	t.pendingDeletes = 0
 }
 
 // Close marks the tree as closed. Subsequent operations will still work
@@ -297,7 +332,7 @@ func (t *BETree[K, V]) Upsert(key K, fn UpsertFn[V]) {
 	} else {
 		newVal = fn(nil, false)
 	}
-	t.putLocked(key, newVal)
+	t.putLocked(key, newVal, !exists)
 }
 
 // PutIfAbsent inserts value only if key does not exist. Returns true if inserted.
@@ -308,7 +343,7 @@ func (t *BETree[K, V]) PutIfAbsent(key K, value V) bool {
 	if _, exists := t.getFromNode(t.root, key); exists {
 		return false
 	}
-	t.putLocked(key, value)
+	t.putLocked(key, value, true)
 	return true
 }
 
