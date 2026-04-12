@@ -20,6 +20,12 @@ jobs:
       with:
         go-version: '1.26'
 
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v8
+      with:
+        version: v2.11.4
+        args: --timeout=5m
+
     - name: Build
       run: make clean fmt build
 
