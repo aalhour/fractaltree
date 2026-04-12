@@ -3,6 +3,7 @@ package fractaltree
 import (
 	"cmp"
 	"iter"
+	"sync"
 )
 
 // Tree is the interface implemented by both BETree (in-memory) and
@@ -53,9 +54,7 @@ type Tree[K any, V any] interface {
 	// Cursor returns a positioned cursor for manual bidirectional iteration.
 	Cursor() *Cursor[K, V]
 
-	// Close releases resources held by the tree. For BETree this is a no-op
-	// beyond marking the tree as closed. For DiskBETree it flushes pending
-	// buffers and closes the underlying storage.
+	// Close releases resources held by the tree.
 	Close() error
 }
 
@@ -66,14 +65,11 @@ type BETree[K any, V any] struct {
 	params treeParams
 	size   int
 	closed bool
+	mu     sync.RWMutex
 }
 
 // New creates a BETree for keys that satisfy [cmp.Ordered].
 // The comparator is derived automatically via [cmp.Compare].
-//
-// Example:
-//
-//	t, err := fractaltree.New[int, string]()
 func New[K cmp.Ordered, V any](opts ...Option) (*BETree[K, V], error) {
 	return NewWithCompare[K, V](cmp.Compare, opts...)
 }
@@ -81,9 +77,6 @@ func New[K cmp.Ordered, V any](opts ...Option) (*BETree[K, V], error) {
 // NewWithCompare creates a BETree with a user-supplied comparator.
 // The comparator must return a negative value when a < b, zero when a == b,
 // and a positive value when a > b.
-//
-// Use this for composite keys or custom orderings that do not satisfy
-// [cmp.Ordered].
 func NewWithCompare[K any, V any](compare func(K, K) int, opts ...Option) (*BETree[K, V], error) {
 	if compare == nil {
 		return nil, ErrNilCompare
@@ -101,4 +94,182 @@ func NewWithCompare[K any, V any](compare func(K, K) int, opts ...Option) (*BETr
 	}
 	t.root = newLeaf[K, V](params.leafCap)
 	return t, nil
+}
+
+// Put inserts or overwrites the value for key.
+func (t *BETree[K, V]) Put(key K, value V) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.root.leaf {
+		if t.root.leafInsert(key, value, t.cmp) {
+			t.size++
+		}
+		if len(t.root.keys) > t.params.leafCap {
+			t.splitRoot()
+		}
+		return
+	}
+
+	// For internal root, check existence to track size accurately.
+	if _, exists := t.getFromNode(t.root, key); !exists {
+		t.size++
+	}
+	t.root.buffer = append(t.root.buffer, Message[K, V]{Kind: MsgPut, Key: key, Value: value})
+	if len(t.root.buffer) > t.params.bufferCap {
+		t.flushNode(t.root)
+		if len(t.root.children) > t.params.fanout {
+			t.splitRoot()
+		}
+	}
+}
+
+// Get returns the value for key and true, or the zero value and false.
+func (t *BETree[K, V]) Get(key K) (V, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.getFromNode(t.root, key)
+}
+
+// getFromNode recursively searches for key starting at the given node.
+// At each internal node, it checks the buffer for pending messages (newest
+// first). If a definitive message is found, it resolves immediately.
+// Otherwise it routes to the appropriate child.
+func (t *BETree[K, V]) getFromNode(n *node[K, V], key K) (V, bool) {
+	if n.leaf {
+		i, found := n.leafSearch(key, t.cmp)
+		if found {
+			return n.values[i], true
+		}
+		var zero V
+		return zero, false
+	}
+
+	// Scan buffer backwards (newest message first).
+	for i := len(n.buffer) - 1; i >= 0; i-- {
+		if t.cmp(n.buffer[i].Key, key) == 0 {
+			switch n.buffer[i].Kind {
+			case MsgPut:
+				return n.buffer[i].Value, true
+			case MsgDelete:
+				var zero V
+				return zero, false
+			}
+		}
+	}
+
+	childIdx := n.findChildIndex(key, t.cmp)
+	return t.getFromNode(n.children[childIdx], key)
+}
+
+// Delete removes key from the tree. Returns true if the key existed.
+func (t *BETree[K, V]) Delete(key K) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.root.leaf {
+		if t.root.leafDelete(key, t.cmp) {
+			t.size--
+			return true
+		}
+		return false
+	}
+
+	if _, exists := t.getFromNode(t.root, key); !exists {
+		return false
+	}
+	t.size--
+	t.root.buffer = append(t.root.buffer, Message[K, V]{Kind: MsgDelete, Key: key})
+	if len(t.root.buffer) > t.params.bufferCap {
+		t.flushNode(t.root)
+		if len(t.root.children) > t.params.fanout {
+			t.splitRoot()
+		}
+	}
+	return true
+}
+
+// Contains reports whether key exists in the tree.
+func (t *BETree[K, V]) Contains(key K) bool {
+	_, found := t.Get(key)
+	return found
+}
+
+// Len returns the number of key-value pairs in the tree.
+func (t *BETree[K, V]) Len() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.size
+}
+
+// Clear removes all entries from the tree.
+func (t *BETree[K, V]) Clear() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.root = newLeaf[K, V](t.params.leafCap)
+	t.size = 0
+}
+
+// Close marks the tree as closed. Subsequent operations will still work
+// but this method exists to satisfy the Tree interface. For BETree it is
+// effectively a no-op; DiskBETree uses it to flush and close storage.
+func (t *BETree[K, V]) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.closed = true
+	return nil
+}
+
+// --- Stubs for operations implemented in later chunks ---
+
+// DeleteRange removes all keys in [lo, hi). Returns the count removed.
+func (t *BETree[K, V]) DeleteRange(_, _ K) int {
+	// TODO: implement in a later chunk.
+	return 0
+}
+
+// Upsert applies fn atomically to the value at key.
+func (t *BETree[K, V]) Upsert(_ K, _ UpsertFn[V]) {
+	// TODO: implement in a later chunk.
+}
+
+// PutIfAbsent inserts value only if key does not exist. Returns true if inserted.
+func (t *BETree[K, V]) PutIfAbsent(_ K, _ V) bool {
+	// TODO: implement in a later chunk.
+	return false
+}
+
+// All returns an iterator over all key-value pairs in ascending order.
+func (t *BETree[K, V]) All() iter.Seq2[K, V] {
+	// TODO: implement in a later chunk.
+	return func(_ func(K, V) bool) {}
+}
+
+// Ascend returns an iterator over all key-value pairs in ascending order.
+func (t *BETree[K, V]) Ascend() iter.Seq2[K, V] {
+	return t.All()
+}
+
+// Descend returns an iterator over all key-value pairs in descending order.
+func (t *BETree[K, V]) Descend() iter.Seq2[K, V] {
+	// TODO: implement in a later chunk.
+	return func(_ func(K, V) bool) {}
+}
+
+// Range returns an iterator over keys in [lo, hi) in ascending order.
+func (t *BETree[K, V]) Range(_, _ K) iter.Seq2[K, V] {
+	// TODO: implement in a later chunk.
+	return func(_ func(K, V) bool) {}
+}
+
+// DescendRange returns an iterator over keys in (lo, hi] in descending order.
+func (t *BETree[K, V]) DescendRange(_, _ K) iter.Seq2[K, V] {
+	// TODO: implement in a later chunk.
+	return func(_ func(K, V) bool) {}
+}
+
+// Cursor returns a positioned cursor for manual bidirectional iteration.
+func (t *BETree[K, V]) Cursor() *Cursor[K, V] {
+	// TODO: implement in a later chunk.
+	return &Cursor[K, V]{}
 }
