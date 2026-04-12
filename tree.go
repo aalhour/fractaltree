@@ -3,6 +3,7 @@ package fractaltree
 import (
 	"cmp"
 	"iter"
+	"slices"
 	"sync"
 )
 
@@ -100,7 +101,11 @@ func NewWithCompare[K any, V any](compare func(K, K) int, opts ...Option) (*BETr
 func (t *BETree[K, V]) Put(key K, value V) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.putLocked(key, value)
+}
 
+// putLocked is the lock-free core of Put. Caller must hold t.mu.
+func (t *BETree[K, V]) putLocked(key K, value V) {
 	if t.root.leaf {
 		if t.root.leafInsert(key, value, t.cmp) {
 			t.size++
@@ -166,7 +171,11 @@ func (t *BETree[K, V]) getFromNode(n *node[K, V], key K) (V, bool) {
 func (t *BETree[K, V]) Delete(key K) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.deleteLocked(key)
+}
 
+// deleteLocked is the lock-free core of Delete. Caller must hold t.mu.
+func (t *BETree[K, V]) deleteLocked(key K) bool {
 	if t.root.leaf {
 		if t.root.leafDelete(key, t.cmp) {
 			t.size--
@@ -220,23 +229,87 @@ func (t *BETree[K, V]) Close() error {
 	return nil
 }
 
-// --- Stubs for operations implemented in later chunks ---
-
 // DeleteRange removes all keys in [lo, hi). Returns the count removed.
-func (t *BETree[K, V]) DeleteRange(_, _ K) int {
-	// TODO: implement in a later chunk.
-	return 0
+// Keys are collected eagerly from leaves and buffers, deduplicated, verified,
+// and deleted individually. This is correct for in-memory trees; a disk-backed
+// tree would buffer MsgDeleteRange messages instead.
+func (t *BETree[K, V]) DeleteRange(lo, hi K) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.cmp(lo, hi) >= 0 {
+		return 0
+	}
+
+	// Collect all candidate keys that appear anywhere in the tree within [lo, hi).
+	var candidates []K
+	t.collectCandidateKeys(t.root, lo, hi, &candidates)
+
+	// Sort and deduplicate so each key is attempted at most once.
+	slices.SortFunc(candidates, t.cmp)
+	candidates = slices.CompactFunc(candidates, func(a, b K) bool {
+		return t.cmp(a, b) == 0
+	})
+
+	count := 0
+	for _, key := range candidates {
+		if t.deleteLocked(key) {
+			count++
+		}
+	}
+	return count
 }
 
-// Upsert applies fn atomically to the value at key.
-func (t *BETree[K, V]) Upsert(_ K, _ UpsertFn[V]) {
-	// TODO: implement in a later chunk.
+// collectCandidateKeys appends all keys from leaves and MsgPut buffer entries
+// that fall within [lo, hi). The result may contain duplicates.
+func (t *BETree[K, V]) collectCandidateKeys(n *node[K, V], lo, hi K, out *[]K) {
+	if n.leaf {
+		for _, k := range n.keys {
+			if t.cmp(k, lo) >= 0 && t.cmp(k, hi) < 0 {
+				*out = append(*out, k)
+			}
+		}
+		return
+	}
+	for i := range n.buffer {
+		if n.buffer[i].Kind == MsgPut &&
+			t.cmp(n.buffer[i].Key, lo) >= 0 &&
+			t.cmp(n.buffer[i].Key, hi) < 0 {
+			*out = append(*out, n.buffer[i].Key)
+		}
+	}
+	for _, child := range n.children {
+		t.collectCandidateKeys(child, lo, hi, out)
+	}
+}
+
+// Upsert applies fn atomically to the value at key. If the key exists, fn
+// receives a pointer to the current value and exists=true. Otherwise fn
+// receives nil and exists=false. The returned value is stored.
+func (t *BETree[K, V]) Upsert(key K, fn UpsertFn[V]) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	v, exists := t.getFromNode(t.root, key)
+	var newVal V
+	if exists {
+		newVal = fn(&v, true)
+	} else {
+		newVal = fn(nil, false)
+	}
+	t.putLocked(key, newVal)
 }
 
 // PutIfAbsent inserts value only if key does not exist. Returns true if inserted.
-func (t *BETree[K, V]) PutIfAbsent(_ K, _ V) bool {
-	// TODO: implement in a later chunk.
-	return false
+func (t *BETree[K, V]) PutIfAbsent(key K, value V) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if _, exists := t.getFromNode(t.root, key); exists {
+		return false
+	}
+	t.putLocked(key, value)
+	return true
 }
 
 // All returns an iterator over all key-value pairs in ascending order.

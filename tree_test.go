@@ -359,6 +359,109 @@ func TestEdge_StringKeys(t *testing.T) {
 	assert.Equal(t, 4, tree.Len())
 }
 
+// --- DeleteRange ---
+
+func TestDeleteRange_EmptyTree(t *testing.T) {
+	tree := newTestTree(t)
+	assert.Equal(t, 0, tree.DeleteRange(0, 100))
+	assert.Equal(t, 0, tree.Len())
+}
+
+func TestDeleteRange_RemovesCorrectSubset(t *testing.T) {
+	tree := newTestTree(t)
+	for i := range 10 {
+		tree.Put(i, "v")
+	}
+
+	// Delete keys [3, 7) => 3, 4, 5, 6
+	count := tree.DeleteRange(3, 7)
+	assert.Equal(t, 4, count)
+	assert.Equal(t, 6, tree.Len())
+
+	for i := range 10 {
+		if i >= 3 && i < 7 {
+			assert.False(t, tree.Contains(i), "key %d should be deleted", i)
+		} else {
+			assert.True(t, tree.Contains(i), "key %d should remain", i)
+		}
+	}
+}
+
+func TestDeleteRange_LoGreaterOrEqualHi(t *testing.T) {
+	tree := newTestTree(t)
+	tree.Put(1, "v")
+	tree.Put(2, "v")
+
+	assert.Equal(t, 0, tree.DeleteRange(5, 5), "lo == hi should be no-op")
+	assert.Equal(t, 0, tree.DeleteRange(5, 3), "lo > hi should be no-op")
+	assert.Equal(t, 2, tree.Len())
+}
+
+func TestDeleteRange_AllKeys(t *testing.T) {
+	tree := newTestTree(t)
+	for i := range 20 {
+		tree.Put(i, "v")
+	}
+
+	count := tree.DeleteRange(0, 20)
+	assert.Equal(t, 20, count)
+	assert.Equal(t, 0, tree.Len())
+}
+
+func TestDeleteRange_NoKeysInRange(t *testing.T) {
+	tree := newTestTree(t)
+	for i := range 5 {
+		tree.Put(i, "v")
+	}
+
+	count := tree.DeleteRange(10, 20)
+	assert.Equal(t, 0, count)
+	assert.Equal(t, 5, tree.Len())
+}
+
+func TestDeleteRange_AfterFlush(t *testing.T) {
+	tree := newSmallTree(t)
+
+	for i := range 50 {
+		tree.Put(i, "v")
+	}
+
+	count := tree.DeleteRange(10, 30)
+	assert.Equal(t, 20, count)
+	assert.Equal(t, 30, tree.Len())
+
+	for i := range 50 {
+		if i >= 10 && i < 30 {
+			assert.False(t, tree.Contains(i), "key %d should be deleted", i)
+		} else {
+			assert.True(t, tree.Contains(i), "key %d should remain", i)
+		}
+	}
+}
+
+func TestDeleteRange_ThenReinsert(t *testing.T) {
+	tree := newSmallTree(t)
+	for i := range 20 {
+		tree.Put(i, "old")
+	}
+
+	tree.DeleteRange(5, 15)
+	for i := 5; i < 15; i++ {
+		tree.Put(i, "new")
+	}
+
+	for i := range 20 {
+		v, ok := tree.Get(i)
+		assert.True(t, ok, "key %d should exist", i)
+		if i >= 5 && i < 15 {
+			assert.Equal(t, "new", v)
+		} else {
+			assert.Equal(t, "old", v)
+		}
+	}
+	assert.Equal(t, 20, tree.Len())
+}
+
 // --- Flush and split behavior ---
 // Use a small block size to force flushes and splits at low key counts.
 
