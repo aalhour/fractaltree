@@ -27,4 +27,97 @@ BenchmarkPut/Random/10000-12            	     279	   4433287 ns/op	 3355596 B/op
 BenchmarkPut/Random/10000-12            	     273	   4337354 ns/op	 3345323 B/op	    3199 allocs/op
 BenchmarkPut/Random/10000-12            	     274	   4372334 ns/op	 3342712 B/op	    3172 allocs/op
 BenchmarkPut/Sequential/100000-12       	     100	  11649673 ns/op	34814051 B/op	   22557 allocs/op
-BenchmarkPut/Sequential/100000-12       	
+BenchmarkPut/Sequential/100000-12       	     100	  11890239 ns/op	34814056 B/op	   22557 allocs/op
+BenchmarkPut/Sequential/100000-12       	     100	  11659383 ns/op	34814050 B/op	   22557 allocs/op
+BenchmarkPut/Sequential/100000-12       	     100	  11652996 ns/op	34814042 B/op	   22556 allocs/op
+BenchmarkPut/Sequential/100000-12       	     100	  11568677 ns/op	34814054 B/op	   22557 allocs/op
+BenchmarkPut/Sequential/100000-12       	     100	  11800644 ns/op	34814055 B/op	   22557 allocs/op
+BenchmarkPut/Random/100000-12           	      10	 106229167 ns/op	210164467 B/op	  681218 allocs/op
+BenchmarkPut/Random/100000-12           	      10	 107005650 ns/op	209824137 B/op	  679772 allocs/op
+BenchmarkPut/Random/100000-12           	      10	 107069442 ns/op	210040732 B/op	  682521 allocs/op
+BenchmarkPut/Random/100000-12           	      10	 108254912 ns/op	210604059 B/op	  684164 allocs/op
+BenchmarkPut/Random/100000-12           	      10	 108315425 ns/op	209434414 B/op	  678888 allocs/op
+BenchmarkPut/Random/100000-12           	      10	 107071533 ns/op	210228395 B/op	  682525 allocs/op
+BenchmarkPut/Sequential/1000000-12      	       8	 138632412 ns/op	512769162 B/op	  353975 allocs/op
+BenchmarkPut/Sequential/1000000-12      	       8	 139910917 ns/op	512769148 B/op	  353975 allocs/op
+BenchmarkPut/Sequential/1000000-12      	       8	 139676406 ns/op	512768980 B/op	  353973 allocs/op
+BenchmarkPut/Sequential/1000000-12      	       8	 138659516 ns/op	512769204 B/op	  353975 allocs/op
+BenchmarkPut/Sequential/1000000-12      	       8	 139325760 ns/op	512769190 B/op	  353975 allocs/op
+BenchmarkPut/Sequential/1000000-12      	       8	 139241839 ns/op	512768994 B/op	  353973 allocs/op
+BenchmarkPut/Random/1000000-12          	       1	1839804583 ns/op	6856081936 B/op	11693287 allocs/op
+BenchmarkPut/Random/1000000-12          	       1	1653124542 ns/op	5538318560 B/op	10994301 allocs/op
+BenchmarkPut/Random/1000000-12          	       1	1658336375 ns/op	5533583136 B/op	11001485 allocs/op
+BenchmarkPut/Random/1000000-12          	       1	1733882500 ns/op	5901849456 B/op	11373704 allocs/op
+BenchmarkPut/Random/1000000-12          	       1	1671306625 ns/op	5568627552 B/op	10942020 allocs/op
+BenchmarkPut/Random/1000000-12          	       1	1796666292 ns/op	6361052800 B/op	11428241 allocs/op
+BenchmarkGet/Hit-12                     	      67	  17491537 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Hit-12                     	      68	  17440348 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Hit-12                     	      70	  17601555 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Hit-12                     	      70	  17406484 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Hit-12                     	      68	  17511426 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Hit-12                     	      69	  17455612 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Miss-12                    	     133	   8960015 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Miss-12                    	     132	   9070326 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Miss-12                    	     132	   9053533 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Miss-12                    	     134	   8932740 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Miss-12                    	     134	   8933267 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGet/Miss-12                    	     132	   8913822 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDelete-12                      	      26	  42857918 ns/op	39443686 B/op	   32939 allocs/op
+BenchmarkDelete-12                      	      27	  42483148 ns/op	39443726 B/op	   32939 allocs/op
+BenchmarkDelete-12                      	      26	  43278011 ns/op	39443678 B/op	   32939 allocs/op
+BenchmarkDelete-12                      	      27	  42327664 ns/op	39443701 B/op	   32939 allocs/op
+BenchmarkDelete-12                      	      27	  43048327 ns/op	39443693 B/op	   32939 allocs/op
+BenchmarkDelete-12                      	      27	  42431511 ns/op	39443697 B/op	   32939 allocs/op
+BenchmarkRange/10-12                    	    4707	    256630 ns/op	     480 B/op	       9 allocs/op
+BenchmarkRange/10-12                    	    4582	    256767 ns/op	     480 B/op	       9 allocs/op
+BenchmarkRange/10-12                    	    4635	    254694 ns/op	     480 B/op	       9 allocs/op
+BenchmarkRange/10-12                    	    4784	    256930 ns/op	     480 B/op	       9 allocs/op
+BenchmarkRange/10-12                    	    4728	    255321 ns/op	     480 B/op	       9 allocs/op
+BenchmarkRange/10-12                    	    4683	    254103 ns/op	     480 B/op	       9 allocs/op
+BenchmarkRange/100-12                   	    4544	    267770 ns/op	    3904 B/op	      12 allocs/op
+BenchmarkRange/100-12                   	    4459	    269405 ns/op	    3904 B/op	      12 allocs/op
+BenchmarkRange/100-12                   	    4585	    266665 ns/op	    3904 B/op	      12 allocs/op
+BenchmarkRange/100-12                   	    4524	    266918 ns/op	    3904 B/op	      12 allocs/op
+BenchmarkRange/100-12                   	    4534	    267468 ns/op	    3904 B/op	      12 allocs/op
+BenchmarkRange/100-12                   	    4573	    267548 ns/op	    3904 B/op	      12 allocs/op
+BenchmarkRange/1000-12                  	    3050	    385516 ns/op	   41664 B/op	      16 allocs/op
+BenchmarkRange/1000-12                  	    3110	    394246 ns/op	   41664 B/op	      16 allocs/op
+BenchmarkRange/1000-12                  	    3046	    387414 ns/op	   41664 B/op	      16 allocs/op
+BenchmarkRange/1000-12                  	    3117	    380943 ns/op	   41664 B/op	      16 allocs/op
+BenchmarkRange/1000-12                  	    3182	    384003 ns/op	   41664 B/op	      16 allocs/op
+BenchmarkRange/1000-12                  	    3123	    381536 ns/op	   41664 B/op	      16 allocs/op
+BenchmarkRange/10000-12                 	     801	   1496476 ns/op	  521536 B/op	      23 allocs/op
+BenchmarkRange/10000-12                 	     790	   1498194 ns/op	  521536 B/op	      23 allocs/op
+BenchmarkRange/10000-12                 	     801	   1498587 ns/op	  521536 B/op	      23 allocs/op
+BenchmarkRange/10000-12                 	     805	   1502582 ns/op	  521536 B/op	      23 allocs/op
+BenchmarkRange/10000-12                 	     788	   1501930 ns/op	  521536 B/op	      23 allocs/op
+BenchmarkRange/10000-12                 	     804	   1497376 ns/op	  521536 B/op	      23 allocs/op
+BenchmarkMixed-12                       	      24	  48403082 ns/op	89096569 B/op	  380883 allocs/op
+BenchmarkMixed-12                       	      24	  48537986 ns/op	89315761 B/op	  382099 allocs/op
+BenchmarkMixed-12                       	      24	  48395674 ns/op	89101345 B/op	  380908 allocs/op
+BenchmarkMixed-12                       	      24	  50257384 ns/op	89439090 B/op	  382622 allocs/op
+BenchmarkMixed-12                       	      24	  48157267 ns/op	88969470 B/op	  380265 allocs/op
+BenchmarkMixed-12                       	      24	  48644538 ns/op	89415733 B/op	  382479 allocs/op
+BenchmarkUpsert-12                      	    2474	    475549 ns/op	  145808 B/op	   10006 allocs/op
+BenchmarkUpsert-12                      	    2523	    475605 ns/op	  145808 B/op	   10006 allocs/op
+BenchmarkUpsert-12                      	    2522	    476255 ns/op	  145808 B/op	   10006 allocs/op
+BenchmarkUpsert-12                      	    2562	    484578 ns/op	  145808 B/op	   10006 allocs/op
+BenchmarkUpsert-12                      	    2528	    479107 ns/op	  145808 B/op	   10006 allocs/op
+BenchmarkUpsert-12                      	    2521	    477363 ns/op	  145808 B/op	   10006 allocs/op
+PASS
+ok  	github.com/aalhour/fractaltree	149.525s
+?   	github.com/aalhour/fractaltree/examples/basic	[no test files]
+?   	github.com/aalhour/fractaltree/examples/bulkimport	[no test files]
+?   	github.com/aalhour/fractaltree/examples/comparator	[no test files]
+?   	github.com/aalhour/fractaltree/examples/concurrent	[no test files]
+?   	github.com/aalhour/fractaltree/examples/disktree-binary	[no test files]
+?   	github.com/aalhour/fractaltree/examples/disktree-gob	[no test files]
+?   	github.com/aalhour/fractaltree/examples/disktree-varint	[no test files]
+?   	github.com/aalhour/fractaltree/examples/eviction	[no test files]
+?   	github.com/aalhour/fractaltree/examples/leaderboard	[no test files]
+?   	github.com/aalhour/fractaltree/examples/mergejoin	[no test files]
+?   	github.com/aalhour/fractaltree/examples/prefixscan	[no test files]
+?   	github.com/aalhour/fractaltree/examples/range	[no test files]
+?   	github.com/aalhour/fractaltree/examples/ratelimiter	[no test files]
+?   	github.com/aalhour/fractaltree/examples/timeseries	[no test files]
+?   	github.com/aalhour/fractaltree/examples/upsert	[no test files]
