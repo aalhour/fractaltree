@@ -188,6 +188,7 @@ If your change introduces a new non-obvious design decision, add an ADR followin
 | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | Full benchmarks, Google BTree comparison, reproduction instructions |
 | [`docs/ADR.md`](docs/ADR.md) | Architecture decision records — the *why* behind design choices |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Completed work, profiling data, remaining optimizations, feature backlog |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Development workflow, testing practices, benchmark procedures |
 | [`doc.go`](doc.go) | Package documentation for pkg.go.dev |
 
 ---
@@ -206,5 +207,3 @@ If your change introduces a new non-obvious design decision, add an ADR followin
 | `make coverage` | To inspect untested paths |
 | `make flamegraph` | To visualize CPU hot paths |
 | `make escape` | To find heap escapes in hot paths |
-
-See `AGENTS.md` for the full Makefile reference.

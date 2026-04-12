@@ -203,6 +203,12 @@ clean-test:
 clean-fuzz:
 	$(GO) clean -fuzzcache
 
+# ─── Publish to pkg.dev.go ───────────────────────────────────────────
+
+## publish: Make the last git tagged version discoverable on pkg.go.dev
+publish:
+	GOPROXY=proxy.golang.org go list -m "github.com/aalhour/fractaltree@$$(git tag --sort=-v:refname | head -n 1)"
+
 # ─── Help ────────────────────────────────────────────────────────────
 
 ## help: Show this help message
