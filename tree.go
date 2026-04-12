@@ -312,8 +312,16 @@ func (t *BETree[K, V]) PutIfAbsent(key K, value V) bool {
 	return true
 }
 
-// Cursor returns a positioned cursor for manual bidirectional iteration.
+// Cursor returns a cursor for manual bidirectional iteration.
+// The cursor operates on a snapshot taken at call time. It starts
+// in an invalid state; call Next, Prev, or Seek to position it.
 func (t *BETree[K, V]) Cursor() *Cursor[K, V] {
-	// TODO: implement in a later chunk.
-	return &Cursor[K, V]{}
+	t.mu.RLock()
+	pairs := t.materializeAll()
+	t.mu.RUnlock()
+
+	return &Cursor[K, V]{
+		pairs: pairs,
+		cmp:   t.cmp,
+	}
 }
