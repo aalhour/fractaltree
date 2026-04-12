@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="FractalTree" width="400">
+</p>
+
 # Fractal Tree (Bε-tree)
 
 ## What Is a Fractal Tree?
