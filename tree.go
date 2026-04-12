@@ -128,12 +128,13 @@ func (t *BETree[K, V]) putLocked(key K, value V, knownNew bool) {
 	// because a buffered MsgDelete may have logically removed a key that
 	// existsInLeaf would still see in the leaf.
 	var isNew bool
-	if knownNew {
+	switch {
+	case knownNew:
 		isNew = true
-	} else if t.pendingDeletes > 0 {
+	case t.pendingDeletes > 0:
 		_, exists := t.getFromNode(t.root, key)
 		isNew = !exists
-	} else {
+	default:
 		isNew = !t.existsInLeaf(t.root, key)
 	}
 	if isNew {
