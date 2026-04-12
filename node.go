@@ -10,9 +10,10 @@ type node[K any, V any] struct {
 	leaf bool
 
 	// Internal node fields.
-	pivots   []K
-	children []*node[K, V]
-	buffer   []Message[K, V]
+	pivots       []K
+	children     []*node[K, V]
+	buffer       []Message[K, V]
+	flushBuckets [][]Message[K, V] // reused across flushes to avoid per-flush allocations
 
 	// Leaf node fields.
 	keys   []K

@@ -11,7 +11,16 @@ func (t *BETree[K, V]) flushNode(n *node[K, V]) {
 	}
 
 	numChildren := len(n.children)
-	buckets := make([][]Message[K, V], numChildren)
+
+	// Grow the reusable bucket slice if the child count increased (due to splits).
+	for len(n.flushBuckets) < numChildren {
+		n.flushBuckets = append(n.flushBuckets, nil)
+	}
+	buckets := n.flushBuckets[:numChildren]
+	for i := range buckets {
+		buckets[i] = buckets[i][:0]
+	}
+
 	for _, msg := range n.buffer {
 		idx := n.findChildIndex(msg.Key, t.cmp)
 		buckets[idx] = append(buckets[idx], msg)
@@ -25,14 +34,15 @@ func (t *BETree[K, V]) flushNode(n *node[K, V]) {
 		}
 	}
 
-	// Rebuild buffer keeping only unflushed messages.
-	remaining := make([]Message[K, V], 0, len(n.buffer)-len(buckets[heaviest]))
+	// Compact buffer in-place keeping only unflushed messages.
+	k := 0
 	for i, bucket := range buckets {
 		if i != heaviest {
-			remaining = append(remaining, bucket...)
+			k += copy(n.buffer[k:], bucket)
 		}
 	}
-	n.buffer = remaining
+	clear(n.buffer[k:]) // zero trailing slots for GC
+	n.buffer = n.buffer[:k]
 
 	child := n.children[heaviest]
 	if child.leaf {
