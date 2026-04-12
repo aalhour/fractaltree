@@ -312,35 +312,6 @@ func (t *BETree[K, V]) PutIfAbsent(key K, value V) bool {
 	return true
 }
 
-// All returns an iterator over all key-value pairs in ascending order.
-func (t *BETree[K, V]) All() iter.Seq2[K, V] {
-	// TODO: implement in a later chunk.
-	return func(_ func(K, V) bool) {}
-}
-
-// Ascend returns an iterator over all key-value pairs in ascending order.
-func (t *BETree[K, V]) Ascend() iter.Seq2[K, V] {
-	return t.All()
-}
-
-// Descend returns an iterator over all key-value pairs in descending order.
-func (t *BETree[K, V]) Descend() iter.Seq2[K, V] {
-	// TODO: implement in a later chunk.
-	return func(_ func(K, V) bool) {}
-}
-
-// Range returns an iterator over keys in [lo, hi) in ascending order.
-func (t *BETree[K, V]) Range(_, _ K) iter.Seq2[K, V] {
-	// TODO: implement in a later chunk.
-	return func(_ func(K, V) bool) {}
-}
-
-// DescendRange returns an iterator over keys in (lo, hi] in descending order.
-func (t *BETree[K, V]) DescendRange(_, _ K) iter.Seq2[K, V] {
-	// TODO: implement in a later chunk.
-	return func(_ func(K, V) bool) {}
-}
-
 // Cursor returns a positioned cursor for manual bidirectional iteration.
 func (t *BETree[K, V]) Cursor() *Cursor[K, V] {
 	// TODO: implement in a later chunk.
