@@ -15,6 +15,21 @@ coverage.*
 *.coverprofile
 profile.cov
 
+# Profiling artifacts (from make profile-*)
+*.prof
+cpu.prof
+mem.prof
+alloc.prof
+mutex.prof
+block.prof
+
+# Benchmark output
+bench.out
+bench.old
+
+# Fuzz cache is managed by Go but can be large
+testdata/fuzz/
+
 # OS stuff
 .DS_Store
 
