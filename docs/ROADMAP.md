@@ -113,39 +113,91 @@ Added reusable `flushBuckets` field to internal nodes, reset via `[:0]` each flu
 
 ---
 
+## Completed (v0.3.0 — 2026-04-12)
+
+Informed by profiling v0.2.1 on Apple M2 Max / Go 1.26. Workload: `Put/Random/100K` (count=6).
+
+### Pre-P2 profile (top offenders)
+
+**CPU:**
+
+| Rank | Function | Flat | Cum | % of Total |
+|:-----|:---------|-----:|----:|:-----------|
+| 1 | `runtime.memmove` (via `slices.Insert`) | 690ms | 690ms | **16.0%** |
+| 2 | `cmp.Compare` | 430ms | 440ms | **10.0%** |
+| 3 | `findChildIndex` | 360ms | 560ms | **8.4%** |
+| 4 | `leafSearch` | 160ms | 340ms | **3.7%** |
+| 5 | `flushNode` (self) | 200ms | 1.63s | **4.7%** |
+| 6 | `existsInLeaf` | 30ms | 490ms | 0.7% flat, 11.4% cum |
+
+**Memory (alloc_space):**
+
+| Rank | Function | Alloc | % of Total |
+|:-----|:---------|------:|:-----------|
+| 1 | `slices.Insert` (via `leafInsert`) | 200.8 MB | **53.8%** |
+| 2 | `collectCandidateKeys` | 49.7 MB | 13.3% |
+| 3 | `splitLeafChild` | 42.2 MB | 11.3% |
+| 4 | `materializeRange` | 34.6 MB | 9.3% |
+| 5 | `flushNode` (self) | 9.1 MB | 2.4% |
+
+### P2: Batch merge in `applyToLeaf`
+
+Replaced per-message `leafInsert` (N individual `slices.Insert` memmoves) with three specialized merge paths in `applyToLeaf`:
+
+1. **Append fast-path** (`appendToLeaf`): when all messages sort after the last leaf key (sequential inserts), skip binary search entirely and append in O(N). Zero allocation when capacity suffices.
+2. **Binary-search + chunk-copy** (`mergeLeafPuts`): for puts-only batches, process messages largest-first. Each message does O(log L) binary search, then `copy()` shifts the chunk between insertion points. Total: O(N log L) comparisons + O(L) memmove — same comparisons as N individual inserts but 1 memmove pass instead of N. In-place reverse merge (grow slice, merge from tail) avoids allocation.
+3. **In-place compaction + merge** (`mergeLeafWithDeletes`): for batches containing deletes, phase 1 walks leaf and messages left-to-right applying deletes and overwrites in-place (zero allocation); phase 2 inserts any new keys via `mergeLeafPuts`.
+
+Supporting optimizations:
+- `resolveMessages` skips sort when input is already sorted with no duplicates (common case: each buffered key appears once).
+- Small batches (≤3 messages) still use per-message `leafInsert` to avoid sort+merge overhead.
+
+| Benchmark | v0.2.1 | v0.3.0 | Δ |
+|:----------|-------:|-------:|--:|
+| Put/Sequential/10K | 595µs | 464µs | **-22%** |
+| Put/Sequential/100K | 8.76ms | 6.52ms | **-26%** |
+| Put/Sequential/1M | 105ms | 84ms | **-20%** |
+| Put/Random/10K | 4.13ms | 2.76ms | **-33%** |
+| Put/Random/100K | 70.8ms | 49.9ms | **-30%** |
+| Put/Random/1M | 1127ms | 864ms | **-23%** |
+| Delete | 39.2ms | 18.3ms | **-53%** |
+| Mixed | 34.7ms | 37.3ms | +7.5% |
+| geomean | — | — | **-13.9%** |
+
+The Mixed regression (+7.5%) is a trade-off: the batch merge adds sort+dedup overhead to the write path that is not offset by memmove savings when all writes are overwrites (existing keys). The 80% read portion of Mixed is unaffected. All other benchmarks improved or held steady. Zero allocation regressions: Delete B/op and allocs/op are unchanged from v0.2.1.
+
+### Cumulative improvement (v0.1.0 → v0.3.0)
+
+| Benchmark | v0.1.0 | v0.3.0 | Δ |
+|:----------|-------:|-------:|--:|
+| Put/Sequential/1M | 204ms | 84ms | **-59%** |
+| Put/Random/1M | 3.35s | 864ms | **-74%** |
+| Put/Random/1M allocs | 11.5M | 4.9K | **-99.96%** |
+| Delete | 58.5ms | 18.3ms | **-69%** |
+| Mixed | 58.5ms | 37.3ms | **-36%** |
+
+---
+
 ## Performance Optimizations (Remaining)
-
-### P2: Reduce `slices.Insert` cost in `leafInsert`
-
-**Problem.** `slices.Insert` shifts all elements right of the insertion point via `memmove`. For large leaves (default capacity 4096), mid-leaf insertions move ~2K elements. `memmove` accounts for **7.4% of CPU**.
-
-**Location.** `node.go:77-78` — `slices.Insert(n.keys, i, key)` / `slices.Insert(n.values, i, value)`
-
-**Options.**
-1. **Gap buffer.** Keep a gap in the middle of the slice, shift only within the gap. Amortizes insertion cost.
-2. **Unsorted leaf with deferred compaction.** Append to the end, sort on read or when full. Trades read cost for write cost — may be net negative for mixed workloads.
-3. **Smaller default leaf capacity.** Reducing `B` from 4096 to 1024 cuts average shift length by 4x, at the cost of more splits and slightly deeper trees.
-
-**Impact.** 5-8% CPU reduction on random-write workloads. Sequential writes are unaffected (insertion point is always at the end).
 
 ### P3: Index the message buffer for faster lookups
 
-**Problem.** `getFromNode` scans the buffer linearly backwards (tree.go:154). For buffer capacity 64 (default), this is 64 comparisons per internal node per read. With a 3-level tree, that's ~192 comparisons per `Get`.
+**Problem.** `getFromNode` scans the buffer linearly backwards (`tree.go:188`). For buffer capacity 64 (default), this is up to 64 comparisons per internal node per read. With a 3-level tree, that's ~192 comparisons per `Get`. `cmp.Compare` is the **#2 CPU cost at 10.0%**, called from both `findChildIndex` and `leafSearch` — buffer indexing would reduce the `findChildIndex` calls during read-path buffer scans.
 
-**Location.** `tree.go:154` — `for i := len(n.buffer) - 1; i >= 0; i--`
+**Location.** `tree.go:188` — `for i := len(n.buffer) - 1; i >= 0; i--`
 
 **Options.**
 1. **Sorted buffer + binary search.** Maintain buffer in sorted order by key. Insertion becomes O(log B) instead of O(1), but lookups drop from O(B) to O(log B). Net win if reads outnumber flushes.
 2. **Per-node key index.** A `map[K]int` mapping keys to their latest buffer position. O(1) lookup, but map overhead and GC load from pointers.
 3. **Keep unsorted, batch sort on flush.** Current approach. Acceptable if reads are infrequent relative to writes.
 
-**Impact.** Faster `Get`, `Contains`, and the existence check in `putLocked` (if P0 is not adopted). Most impactful for read-heavy or mixed workloads.
+**Impact.** Faster `Get`, `Contains`, and the existence check in `putLocked` when `pendingDeletes > 0`. Most impactful for read-heavy or mixed workloads.
 
 ### P4: Avoid `defer` in hot-path methods
 
 **Problem.** `Put`, `Get`, `Len` use `defer t.mu.Unlock()` which prevents the compiler from inlining the outer function. While `defer` is cheap (~30ns on modern Go), inlining the caller could enable further optimizations.
 
-**Location.** `tree.go:102-103`, `tree.go:134-135`, `tree.go:209-210`
+**Location.** `tree.go:103-104`, `tree.go:168-169`, `tree.go:243-244`
 
 **Option.** Replace `defer` with explicit unlock before each return. Adds maintenance risk (missed unlocks on new code paths), so only worth it if profiling shows the defer overhead is material relative to the operation cost.
 

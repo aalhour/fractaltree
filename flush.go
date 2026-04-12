@@ -62,16 +62,66 @@ func (t *BETree[K, V]) flushNode(n *node[K, V]) {
 }
 
 // applyToLeaf applies a batch of messages to a leaf node.
-// Messages are applied in order so that later messages override earlier ones.
 //
-// Size correction for MsgPut: putLocked uses existsInLeaf (which skips buffer
-// scans) to decide whether to increment t.size. Two cases need correction here:
-//   - counted=true but leafInsert says overwrite → two MsgPut for the same key
-//     were in flight; the earlier one created the entry, this one overwrites → size--.
-//   - counted=false but leafInsert says new → a pending MsgDelete (from an eager
-//     Delete call that already decremented size) removed the key before this
-//     MsgPut re-creates it → size++.
+// Small batches (≤3 messages) use per-message insert/delete. Larger batches
+// use a sorted merge: stable-sort by key, deduplicate (last writer wins),
+// then merge with the leaf in a single O(L+N) pass instead of N individual
+// O(L) memmoves from slices.Insert.
+//
+// Size correction: putLocked/deleteLocked optimistically adjust t.size at
+// insertion time using heuristics (existsInLeaf, pendingDeletes). The merge
+// path corrects for any mismatch by comparing the leaf's actual key-count
+// delta against the sum of those optimistic adjustments.
 func (t *BETree[K, V]) applyToLeaf(leaf *node[K, V], msgs []Message[K, V]) {
+	if len(msgs) == 0 {
+		return
+	}
+
+	// Small batches: per-message path (avoids sort + merge overhead).
+	if len(msgs) <= 3 {
+		t.applyToLeafSmall(leaf, msgs)
+		return
+	}
+
+	// --- Batch merge path ---
+
+	// Phase 1: Tally optimistic adjustments from putLocked / deleteLocked.
+	preCounted := 0
+	numDeletes := 0
+	for i := range msgs {
+		if msgs[i].Kind == MsgPut && msgs[i].counted {
+			preCounted++
+		} else if msgs[i].Kind == MsgDelete {
+			numDeletes++
+		}
+	}
+	t.pendingDeletes -= numDeletes
+
+	// Phase 2: Stable-sort by key; deduplicate keeping last message per key.
+	msgs = t.resolveMessages(msgs)
+
+	// Phase 3: Merge resolved messages into the leaf.
+	oldLen := len(leaf.keys)
+	switch {
+	case numDeletes == 0 && oldLen > 0 && t.cmp(msgs[0].Key, leaf.keys[oldLen-1]) > 0:
+		// Append fast-path: all messages sort after the last leaf key.
+		// Common for sequential inserts — skip binary search entirely.
+		t.appendToLeaf(leaf, msgs)
+	case numDeletes == 0:
+		t.mergeLeafPuts(leaf, msgs)
+	default:
+		t.mergeLeafWithDeletes(leaf, msgs)
+	}
+
+	// Phase 4: Correct size — undo optimistic tallies, apply actual delta.
+	// putLocked incremented size for each counted MsgPut (+preCounted).
+	// deleteLocked decremented size for each MsgDelete (-numDeletes).
+	// Actual change is (newLen - oldLen). Correction = actual - optimistic.
+	t.size += (len(leaf.keys) - oldLen) - preCounted + numDeletes
+}
+
+// applyToLeafSmall applies a small batch of messages one by one.
+func (t *BETree[K, V]) applyToLeafSmall(leaf *node[K, V], msgs []Message[K, V]) {
 	for i := range msgs {
 		switch msgs[i].Kind {
 		case MsgPut:
@@ -85,6 +135,162 @@ func (t *BETree[K, V]) applyToLeaf(leaf *node[K, V], msgs []Message[K, V]) {
 			leaf.leafDelete(msgs[i].Key, t.cmp)
 			t.pendingDeletes--
 		}
+	}
+}
+
+// resolveMessages sorts messages by key and deduplicates, keeping only the
+// last message per key (last writer wins). When the input is already sorted
+// with no duplicate keys the sort is skipped entirely — this is the common
+// case for flushes where each buffered key appears once.
+func (t *BETree[K, V]) resolveMessages(msgs []Message[K, V]) []Message[K, V] {
+	// Fast check: skip sort if already sorted with no duplicate keys.
+	sorted := true
+	for i := 1; i < len(msgs); i++ {
+		if t.cmp(msgs[i-1].Key, msgs[i].Key) >= 0 {
+			sorted = false
+			break
+		}
+	}
+	if !sorted {
+		slices.SortStableFunc(msgs, func(a, b Message[K, V]) int {
+			return t.cmp(a.Key, b.Key)
+		})
+	}
+	// Deduplicate: keep last message per key (last writer wins).
+	n := 0
+	for i := range msgs {
+		if i+1 < len(msgs) && t.cmp(msgs[i].Key, msgs[i+1].Key) == 0 {
+			continue
+		}
+		msgs[n] = msgs[i]
+		n++
+	}
+	return msgs[:n]
+}
+
+// appendToLeaf appends a sorted, deduplicated, puts-only batch whose first key
+// is greater than every existing leaf key. This is the common path for
+// sequential inserts: O(N) copies, no binary search, zero allocation when the
+// leaf's backing array has sufficient capacity.
+func (t *BETree[K, V]) appendToLeaf(leaf *node[K, V], msgs []Message[K, V]) {
+	leaf.keys = slices.Grow(leaf.keys, len(msgs))
+	leaf.values = slices.Grow(leaf.values, len(msgs))
+	for i := range msgs {
+		leaf.keys = append(leaf.keys, msgs[i].Key)
+		leaf.values = append(leaf.values, msgs[i].Value)
+	}
+}
+
+// mergeLeafPuts merges a sorted, deduplicated, puts-only batch into a leaf
+// using binary-search + chunk-copy. For each put (processed largest-first),
+// a binary search locates its position in O(log L), then copy() shifts the
+// chunk of old keys between insertion points via memmove. Total work is
+// O(N log L) comparisons + O(L) memmove — the same comparisons as N
+// individual inserts but with 1 memmove pass instead of N.
+func (t *BETree[K, V]) mergeLeafPuts(leaf *node[K, V], msgs []Message[K, V]) {
+	numPuts := len(msgs)
+	oldLen := len(leaf.keys)
+
+	leaf.keys = slices.Grow(leaf.keys, numPuts)[:oldLen+numPuts]
+	leaf.values = slices.Grow(leaf.values, numPuts)[:oldLen+numPuts]
+
+	w := oldLen + numPuts - 1 // write position (tail of grown slice)
+	r := oldLen - 1           // rightmost unprocessed old key
+	overwrites := 0
+
+	for p := numPuts - 1; p >= 0; p-- {
+		pos, found := slices.BinarySearchFunc(leaf.keys[:r+1], msgs[p].Key, t.cmp)
+
+		chunkStart := pos
+		if found {
+			chunkStart = pos + 1
+			overwrites++
+		}
+
+		// Shift old keys [chunkStart..r] to their final position via memmove.
+		if chunk := r - chunkStart + 1; chunk > 0 {
+			copy(leaf.keys[w-chunk+1:w+1], leaf.keys[chunkStart:r+1])
+			copy(leaf.values[w-chunk+1:w+1], leaf.values[chunkStart:r+1])
+			w -= chunk
+		}
+
+		leaf.keys[w] = msgs[p].Key
+		leaf.values[w] = msgs[p].Value
+		w--
+		r = pos - 1
+	}
+
+	// Close gap left by overwrites: shift merged portion left.
+	if overwrites > 0 {
+		copy(leaf.keys[r+1:], leaf.keys[w+1:oldLen+numPuts])
+		copy(leaf.values[r+1:], leaf.values[w+1:oldLen+numPuts])
+		finalLen := oldLen + numPuts - overwrites
+		clear(leaf.keys[finalLen : oldLen+numPuts])
+		clear(leaf.values[finalLen : oldLen+numPuts])
+		leaf.keys = leaf.keys[:finalLen]
+		leaf.values = leaf.values[:finalLen]
+	}
+}
+
+// mergeLeafWithDeletes merges a sorted, deduplicated batch that contains at
+// least one MsgDelete into a leaf. Two-phase approach avoids allocation:
+//
+// Phase 1 — In-place compaction: walk leaf and msgs together left-to-right.
+// Delete matches are skipped, put overwrites update in place. New-insert puts
+// (msg key not in leaf) are collected into msgs[:numNew] by reusing the
+// already-consumed prefix (numNew <= mi, so writes never overtake reads).
+//
+// Phase 2 — Insert new keys via mergeLeafPuts (zero allocation when the leaf's
+// backing array has sufficient capacity).
+func (t *BETree[K, V]) mergeLeafWithDeletes(leaf *node[K, V], msgs []Message[K, V]) {
+	li, mi, w, numNew := 0, 0, 0, 0
+	for li < len(leaf.keys) && mi < len(msgs) {
+		c := t.cmp(leaf.keys[li], msgs[mi].Key)
+		switch {
+		case c < 0: // leaf key not in batch — keep it
+			leaf.keys[w] = leaf.keys[li]
+			leaf.values[w] = leaf.values[li]
+			w++
+			li++
+		case c > 0: // msg key not in leaf — collect new-insert puts
+			if msgs[mi].Kind == MsgPut {
+				msgs[numNew] = msgs[mi]
+				numNew++
+			}
+			mi++
+		default: // match — apply overwrite or delete
+			if msgs[mi].Kind == MsgPut {
+				leaf.keys[w] = msgs[mi].Key
+				leaf.values[w] = msgs[mi].Value
+				w++
+			}
+			li++
+			mi++
+		}
+	}
+	// Copy remaining leaf keys that sort after all messages.
+	for li < len(leaf.keys) {
+		leaf.keys[w] = leaf.keys[li]
+		leaf.values[w] = leaf.values[li]
+		w++
+		li++
+	}
+	// Collect remaining new-insert puts (keys beyond all leaf keys).
+	for mi < len(msgs) {
+		if msgs[mi].Kind == MsgPut {
+			msgs[numNew] = msgs[mi]
+			numNew++
+		}
+		mi++
+	}
+	clear(leaf.keys[w:])
+	clear(leaf.values[w:])
+	leaf.keys = leaf.keys[:w]
+	leaf.values = leaf.values[:w]
+
+	// Phase 2: merge any new-insert puts into the compacted leaf.
+	if numNew > 0 {
+		t.mergeLeafPuts(leaf, msgs[:numNew])
 	}
 }
 

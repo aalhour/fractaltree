@@ -1,0 +1,70 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/aalhour/fractaltree
+cpu: Apple M2 Max
+                          │ /tmp/baseline_v0.2.1.txt │    /tmp/bench_p2_v2_current.txt     │
+                          │          sec/op          │    sec/op     vs base               │
+Put/Sequential/1000-12                   33.59µ ± 2%   33.46µ ± 13%        ~ (p=0.589 n=6)
+Put/Random/1000-12                       120.6µ ± 2%   115.0µ ± 15%        ~ (p=0.240 n=6)
+Put/Sequential/10000-12                  594.8µ ± 5%   463.6µ ±  1%  -22.06% (p=0.002 n=6)
+Put/Random/10000-12                      4.129m ± 2%   2.757m ±  2%  -33.23% (p=0.002 n=6)
+Put/Sequential/100000-12                 8.757m ± 2%   6.515m ±  1%  -25.61% (p=0.002 n=6)
+Put/Random/100000-12                     70.83m ± 4%   49.92m ±  1%  -29.52% (p=0.002 n=6)
+Put/Sequential/1000000-12               104.89m ± 1%   83.60m ±  2%  -20.29% (p=0.002 n=6)
+Put/Random/1000000-12                   1126.5m ± 7%   864.0m ±  5%  -23.30% (p=0.002 n=6)
+Get/Hit-12                               17.83m ± 0%   17.90m ±  2%        ~ (p=0.394 n=6)
+Get/Miss-12                              8.878m ± 1%   8.880m ±  1%        ~ (p=0.818 n=6)
+Delete-12                                39.21m ± 0%   18.34m ±  1%  -53.22% (p=0.002 n=6)
+Range/10-12                              258.1µ ± 0%   258.7µ ±  1%        ~ (p=0.485 n=6)
+Range/100-12                             270.4µ ± 4%   270.0µ ±  1%        ~ (p=0.485 n=6)
+Range/1000-12                            388.5µ ± 1%   385.4µ ±  1%        ~ (p=0.240 n=6)
+Range/10000-12                           1.541m ± 1%   1.545m ±  1%        ~ (p=0.818 n=6)
+Mixed-12                                 34.65m ± 7%   37.25m ±  2%   +7.52% (p=0.004 n=6)
+Upsert-12                                487.2µ ± 2%   480.4µ ±  1%   -1.39% (p=0.004 n=6)
+geomean                                  3.623m        3.119m        -13.90%
+
+                          │ /tmp/baseline_v0.2.1.txt │     /tmp/bench_p2_v2_current.txt     │
+                          │           B/op           │     B/op      vs base                │
+Put/Sequential/1000-12                64.30Ki ± 0%     64.30Ki ± 0%       ~ (p=1.000 n=6) ¹
+Put/Random/1000-12                    64.30Ki ± 0%     64.30Ki ± 0%       ~ (p=1.000 n=6) ¹
+Put/Sequential/10000-12               829.6Ki ± 0%     829.6Ki ± 0%       ~ (p=0.455 n=6)
+Put/Random/10000-12                   608.9Ki ± 1%     608.9Ki ± 1%       ~ (p=0.933 n=6)
+Put/Sequential/100000-12              11.56Mi ± 0%     11.56Mi ± 0%       ~ (p=0.169 n=6)
+Put/Random/100000-12                  5.780Mi ± 4%     5.840Mi ± 3%       ~ (p=0.937 n=6)
+Put/Sequential/1000000-12             118.0Mi ± 0%     118.0Mi ± 0%       ~ (p=0.307 n=6)
+Put/Random/1000000-12                 55.42Mi ± 3%     56.01Mi ± 5%       ~ (p=0.937 n=6)
+Get/Hit-12                              0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=6) ¹
+Get/Miss-12                             0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=6) ¹
+Delete-12                             3.328Ki ± 0%     3.328Ki ± 0%       ~ (p=0.455 n=6)
+Range/10-12                             480.0 ± 0%       480.0 ± 0%       ~ (p=1.000 n=6) ¹
+Range/100-12                          3.812Ki ± 0%     3.812Ki ± 0%       ~ (p=1.000 n=6) ¹
+Range/1000-12                         40.69Ki ± 0%     40.69Ki ± 0%       ~ (p=1.000 n=6) ¹
+Range/10000-12                        509.3Ki ± 0%     509.3Ki ± 0%       ~ (p=1.000 n=6)
+Mixed-12                                21.00 ± 0%       23.00 ± 4%  +9.52% (p=0.002 n=6)
+Upsert-12                             142.4Ki ± 0%     142.4Ki ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                            ²                 +0.66%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                          │ /tmp/baseline_v0.2.1.txt │     /tmp/bench_p2_v2_current.txt     │
+                          │        allocs/op         │  allocs/op    vs base                │
+Put/Sequential/1000-12                  6.000 ± 0%      6.000 ±  0%       ~ (p=1.000 n=6) ¹
+Put/Random/1000-12                      6.000 ± 0%      6.000 ±  0%       ~ (p=1.000 n=6) ¹
+Put/Sequential/10000-12                 62.00 ± 0%      62.00 ±  0%       ~ (p=1.000 n=6) ¹
+Put/Random/10000-12                     62.00 ± 2%      62.00 ±  2%       ~ (p=1.000 n=6)
+Put/Sequential/100000-12                768.0 ± 0%      768.0 ±  0%       ~ (p=1.000 n=6) ¹
+Put/Random/100000-12                    414.5 ± 2%      415.0 ±  2%       ~ (p=0.848 n=6)
+Put/Sequential/1000000-12              7.980k ± 0%     7.979k ±  0%       ~ (p=0.242 n=6)
+Put/Random/1000000-12                  4.901k ± 2%     4.925k ± 11%       ~ (p=1.000 n=6)
+Get/Hit-12                              0.000 ± 0%      0.000 ±  0%       ~ (p=1.000 n=6) ¹
+Get/Miss-12                             0.000 ± 0%      0.000 ±  0%       ~ (p=1.000 n=6) ¹
+Delete-12                               6.000 ± 0%      6.000 ±  0%       ~ (p=1.000 n=6) ¹
+Range/10-12                             9.000 ± 0%      9.000 ±  0%       ~ (p=1.000 n=6) ¹
+Range/100-12                            12.00 ± 0%      12.00 ±  0%       ~ (p=1.000 n=6) ¹
+Range/1000-12                           16.00 ± 0%      16.00 ±  0%       ~ (p=1.000 n=6) ¹
+Range/10000-12                          23.00 ± 0%      23.00 ±  0%       ~ (p=1.000 n=6) ¹
+Mixed-12                                0.000 ± 0%      0.000 ±  0%       ~ (p=1.000 n=6) ¹
+Upsert-12                              10.01k ± 0%     10.01k ±  0%       ~ (p=1.000 n=6) ¹
+geomean                                            ²                 +0.04%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
