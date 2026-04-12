@@ -54,7 +54,8 @@ race:
 
 ## fuzz: Run fuzz tests (duration set by TIER)
 fuzz:
-	$(GO) test -fuzz=Fuzz -fuzztime=$(FUZZ_TIME) ./...
+	$(GO) test -fuzz=FuzzOperations -fuzztime=$(FUZZ_TIME) .
+	$(GO) test -fuzz=FuzzRange -fuzztime=$(FUZZ_TIME) .
 
 ## stress: Run stress tests with race detector
 stress:
