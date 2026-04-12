@@ -78,35 +78,42 @@
 
 ---
 
-## Performance Optimizations
+## Completed (v0.2.0–v0.2.1 — 2026-04-12)
 
 Informed by profiling v0.1.0 on Apple M2 Max / Go 1.26.
 
-### P0: Eliminate read-on-write in `putLocked`
+### P0: Eliminate buffer scans in `putLocked` (v0.2.0)
 
-**Problem.** Every `Put` calls `getFromNode` to check whether the key already exists, solely to maintain an accurate `size` counter. This full root-to-leaf read accounts for **~15% of total CPU** during write benchmarks.
+Replaced `getFromNode` (full root-to-leaf traversal with O(bufferCap) linear buffer scan per level) with `existsInLeaf` (leaf-only binary search, O(depth × log(fanout) + log(leafCap))) in the write path. A `pendingDeletes` counter triggers fallback to the full check only when buffered deletes are in flight. Added `counted` flag to `Message` for size correction in `applyToLeaf`.
 
-**Location.** `tree.go:120` — `if _, exists := t.getFromNode(t.root, key); !exists { t.size++ }`
+| Benchmark | Before | After | Δ |
+|:----------|-------:|------:|--:|
+| Put/Sequential/1M | 198ms | 143ms | **-28%** |
+| Put/Random/1M | 3.34s | 1.85s | **-45%** |
 
-**Options.**
-1. **Deferred size tracking.** Count net insertions during `applyToLeaf` (where `leafInsert` already returns whether the key was new). Maintain a `pendingSize` delta on buffered messages. `Len()` returns `confirmedSize + pendingSize`. Trade: `Len()` remains O(1) and exact, but the accounting moves into flush.
-2. **Approximate existence check.** Use a bloom filter (or cuckoo filter) of known keys. False positives cause an unnecessary `getFromNode`; false negatives are not possible. Trade: extra memory, filter rebuild on `Clear`.
-3. **Accept eventual consistency.** Make `Len()` return the count of confirmed (flushed) entries only. Document that `Len()` may lag behind `Put` until the next flush. Simplest change, but changes the API contract.
+### P1: Reuse flush bucket allocations (v0.2.1)
 
-**Impact.** ~15% CPU reduction on write-heavy workloads. Eliminates the linear buffer scan that dominates `getFromNode` (tree.go:154).
+Added reusable `flushBuckets` field to internal nodes, reset via `[:0]` each flush. Replaced `remaining` slice allocation with in-place buffer compaction.
 
-### P1: Reuse flush bucket allocations
+| Benchmark | Before | After | Δ |
+|:----------|-------:|------:|--:|
+| Put/Random/1M | 1.70s | 1.08s | **-36%** |
+| Put/Random/1M B/op | 5.5Gi | 55Mi | **-99%** |
+| Put/Random/1M allocs | 11.2M | 4.8K | **-99.96%** |
+| Mixed B/op | 89Mi | 21B | **-100%** |
 
-**Problem.** `flushNode` allocates `make([][]Message, numChildren)` and appends into per-child buckets on every flush. This produces **85.7% of all heap objects** (22.3M objects in the Put benchmark).
+### Cumulative improvement (v0.1.0 → v0.2.1)
 
-**Location.** `flush.go:14` — `buckets := make([][]Message[K, V], numChildren)`
+| Benchmark | v0.1.0 | v0.2.1 | Δ |
+|:----------|-------:|-------:|--:|
+| Put/Sequential/1M | 204ms | 106ms | **-48%** |
+| Put/Random/1M | 3.35s | 1.08s | **-68%** |
+| Put/Random/1M allocs | 11.5M | 4.8K | **-99.96%** |
+| Mixed | 58.5ms | 35ms | **-40%** |
 
-**Options.**
-1. **Pre-allocated buckets on the node.** Each internal node keeps a `[][]Message` field sized to its child count, reused across flushes. Reset with `bucket = bucket[:0]` instead of allocating.
-2. **`sync.Pool` of bucket slices.** Pool `[][]Message` slices keyed by capacity. Less memory per node, but pool overhead on the fast path.
-3. **Single-pass partitioning.** Sort messages by child index first, then slice the sorted array into contiguous runs. Zero bucket allocations — one sort + index scan.
+---
 
-**Impact.** Dramatic reduction in GC pressure. The `remaining` slice on flush.go:29 can also be eliminated by compacting in-place.
+## Performance Optimizations (Remaining)
 
 ### P2: Reduce `slices.Insert` cost in `leafInsert`
 

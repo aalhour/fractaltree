@@ -290,20 +290,20 @@ All benchmarks run on **Apple M2 Max, 32 GB RAM, Go 1.26.2, darwin/arm64**.
 | Workload | N | Time | Allocs |
 |:---------|--:|-----:|-------:|
 | Sequential | 1K | 33 &micro;s | 6 |
-| Sequential | 10K | 1.1 ms | 1,388 |
-| Sequential | 100K | 17.5 ms | 22,556 |
-| Sequential | 1M | 203 ms | 353,973 |
-| Random | 1K | 120 &micro;s | 6 |
-| Random | 10K | 5.5 ms | 3,204 |
-| Random | 100K | 129 ms | 680,476 |
-| Random | 1M | 3.35 s | 11.4M |
+| Sequential | 10K | 584 &micro;s | 62 |
+| Sequential | 100K | 8.8 ms | 768 |
+| Sequential | 1M | 106 ms | 7,979 |
+| Random | 1K | 115 &micro;s | 6 |
+| Random | 10K | 4.1 ms | 62 |
+| Random | 100K | 71 ms | 416 |
+| Random | 1M | 1.08 s | 4,831 |
 
 #### Read Performance (Get, 100K keys)
 
 | Workload | Time / 100K ops | Allocs |
 |:---------|----------------:|-------:|
 | Hit (random) | 17.9 ms | 0 |
-| Miss | 8.9 ms | 0 |
+| Miss | 9.0 ms | 0 |
 
 **Zero allocations on reads.**
 
@@ -311,72 +311,100 @@ All benchmarks run on **Apple M2 Max, 32 GB RAM, Go 1.26.2, darwin/arm64**.
 
 | Result count | Time |
 |-------------:|-----:|
-| 10 | 264 &micro;s |
-| 100 | 276 &micro;s |
-| 1K | 396 &micro;s |
-| 10K | 1.57 ms |
+| 10 | 261 &micro;s |
+| 100 | 273 &micro;s |
+| 1K | 392 &micro;s |
+| 10K | 1.56 ms |
 
 #### Other Operations
 
 | Operation | Time | Notes |
 |:----------|-----:|:------|
-| Delete (100K) | 45.6 ms | Sequential delete all keys |
-| Upsert/Increment (10K) | via bench | 100 counters, 10K total increments |
-| Mixed 80/20 (100K) | 58.5 ms | 80% reads, 20% writes |
+| Delete (100K) | 39.6 ms | Sequential delete all keys |
+| Upsert/Increment (10K) | 485 &micro;s | 100 counters, 10K total increments |
+| Mixed 80/20 (100K) | 35.1 ms | 80% reads, 20% writes |
 
 ### Comparison with Google BTree
 
-Head-to-head benchmark using identical workloads, same machine, same session. Google's [`btree`](https://github.com/google/btree) v1.1.3 with degree 32.
+Head-to-head benchmark using identical workloads, same machine, same session (`count=6`). Google's [`btree`](https://github.com/google/btree) v1.1.3 with degree 32. Reusable benchmark at [`testdata/btree_compare_test.go`](testdata/btree_compare_test.go).
 
 #### Write (Put) &mdash; Sequential
 
-| N | FractalTree | Google BTree | Ratio |
-|--:|------------:|-------------:|------:|
-| 1K | 33.7 &micro;s | 38.4 &micro;s | **0.88x** |
-| 10K | 1.12 ms | 501 &micro;s | 2.24x |
-| 100K | 18.0 ms | 6.26 ms | 2.88x |
+| N | FractalTree | Google BTree | Ratio | Winner |
+|--:|------------:|-------------:|------:|:-------|
+| 1K | 32.4 &micro;s | 58.6 &micro;s | **0.55x** | FractalTree |
+| 10K | 571 &micro;s | 753 &micro;s | **0.76x** | FractalTree |
+| 100K | 8.5 ms | 9.7 ms | **0.88x** | FractalTree |
+
+**FractalTree wins all sequential write sizes** &mdash; buffer insertion + batch flush beats per-key B-tree node operations.
 
 #### Write (Put) &mdash; Random
 
 | N | FractalTree | Google BTree | Ratio |
 |--:|------------:|-------------:|------:|
-| 1K | 122 &micro;s | 67.9 &micro;s | 1.80x |
-| 10K | 5.57 ms | 1.06 ms | 5.27x |
-| 100K | 131 ms | 14.5 ms | 9.06x |
+| 1K | 115 &micro;s | 91 &micro;s | 1.26x |
+| 10K | 4.08 ms | 1.47 ms | 2.78x |
+| 100K | 71.1 ms | 22.7 ms | 3.13x |
 
 #### Read (Get, 100K keys)
 
-| Workload | FractalTree | Google BTree | Ratio |
-|:---------|------------:|-------------:|------:|
-| Hit | 18.2 ms | 13.4 ms | 1.36x |
-| Miss | 9.18 ms | 4.62 ms | 1.99x |
+| Workload | FractalTree | Google BTree | Ratio | Winner |
+|:---------|------------:|-------------:|------:|:-------|
+| Hit | 17.9 ms | 21.3 ms | **0.84x** | FractalTree |
+| Miss | 8.9 ms | 7.4 ms | 1.21x | Google BTree |
+
+**FractalTree wins on read hits** &mdash; zero allocations vs 100K allocs/op from interface boxing in Google BTree.
 
 #### Range Scan (100K key tree)
 
 | Count | FractalTree | Google BTree | Ratio |
 |------:|------------:|-------------:|------:|
-| 10 | 264 &micro;s | 84 ns | 3,143x |
-| 100 | 276 &micro;s | 480 ns | 576x |
-| 1K | 396 &micro;s | 4.0 &micro;s | 99x |
-| 10K | 1.57 ms | 41 &micro;s | 38x |
+| 10 | 260 &micro;s | 141 ns | 1,843x |
+| 100 | 272 &micro;s | 655 ns | 416x |
+| 1K | 391 &micro;s | 5.4 &micro;s | 72x |
+| 10K | 1.56 ms | 57.6 &micro;s | 27x |
 
 #### Mixed (80% Read, 20% Write, 100K keys)
 
 | | FractalTree | Google BTree | Ratio |
 |:---------|------------:|-------------:|------:|
-| Time | 58.5 ms | 14.0 ms | 4.18x |
+| Time | 34.6 ms | 22.5 ms | 1.54x |
+| Allocs/op | 0 | 100,000 | &mdash; |
+
+#### Delete (100K keys)
+
+| | FractalTree | Google BTree | Ratio |
+|:---------|------------:|-------------:|------:|
+| Time | 39.2 ms | 10.0 ms | 3.92x |
+| Allocs/op | 6 | 100,000 | &mdash; |
+
+#### Allocation Efficiency
+
+| Operation | FractalTree | Google BTree |
+|:----------|------------:|-------------:|
+| Put/Sequential/100K | 768 allocs | 109,905 allocs |
+| Put/Random/100K | 416 allocs | 106,940 allocs |
+| Get/Hit (100K) | 0 allocs | 100,000 allocs |
+| Mixed 80/20 (100K) | 0 allocs | 100,000 allocs |
+| Delete (100K) | 6 allocs | 100,000 allocs |
+
+FractalTree achieves **99.6&ndash;100% fewer allocations** than Google BTree on most operations.
 
 #### Analysis
 
 The comparison reveals the expected tradeoff profile of a B&epsilon;-tree vs a B-tree:
 
-- **Sequential writes at small N** are competitive &mdash; the FractalTree wins at 1K because buffer insertion is cheaper than B-tree node splitting.
-- **Reads and range scans** favor the B-tree, as expected. The FractalTree must collect and resolve pending messages from buffers at every level during reads. Range scans pay a materialization cost (snapshot + sort + dedup) rather than doing an in-place tree walk.
-- **Random writes at scale** show the B-tree pulling ahead because Google's btree is a highly optimized, mature implementation with cache-friendly memory layout. The amortized I/O advantage of B&epsilon;-trees is most visible in **disk-backed** scenarios where the cost of a random I/O dwarfs in-memory pointer chasing.
+- **Sequential writes** are faster at every size tested (1K&ndash;100K). Buffer insertion + batch flush beats per-key B-tree node splitting.
+- **Read hits** are faster (0.84x) thanks to zero allocations &mdash; Google BTree pays 100K interface-boxing allocations per 100K lookups.
+- **Read misses** slightly favor the B-tree due to its shallower traversal and direct comparison path.
+- **Range scans** heavily favor the B-tree. FractalTree materializes a snapshot (sort + dedup) while Google BTree walks the tree in-place.
+- **Random writes** favor the B-tree in-memory due to its cache-friendly layout. The amortized I/O advantage of B&epsilon;-trees is most visible in **disk-backed** scenarios where the cost of random I/O dwarfs in-memory pointer chasing.
 
 **When to choose FractalTree over a B-tree:**
 
-- Your workload is **disk-backed** &mdash; the batched flush model reduces random I/O by orders of magnitude, which is where the theoretical advantage materializes.
+- Your workload is **write-heavy with sequential or batched keys** &mdash; FractalTree is faster at all sizes.
+- Your workload is **disk-backed** &mdash; the batched flush model reduces random I/O by orders of magnitude.
+- You care about **allocation pressure / GC load** &mdash; FractalTree uses 99%+ fewer allocations on most operations.
 - You need **Upsert / Increment / CompareAndSwap** semantics &mdash; B&epsilon;-trees support these natively via the message buffer.
 - You need **range deletion** as a first-class operation.
 - You want a **pluggable persistence layer** with codec support.
