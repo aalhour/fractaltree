@@ -31,10 +31,12 @@ func (VarintStringCodec) Decode(data []byte) (string, error) {
 	if n <= 0 {
 		return "", errors.New("invalid varint")
 	}
-	if uint64(len(data)-n) < length {
-		return "", fmt.Errorf("data too short: want %d bytes, have %d", length, len(data)-n)
+	remaining := len(data) - n
+	if remaining < 0 || length > uint64(remaining) {
+		return "", fmt.Errorf("data too short: want %d bytes, have %d", length, remaining)
 	}
-	return string(data[n : n+int(length)]), nil
+	end := n + int(length) //nolint:gosec // length <= remaining, which fits in int
+	return string(data[n:end]), nil
 }
 
 type memFlusher[K, V any] struct {

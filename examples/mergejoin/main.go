@@ -10,33 +10,44 @@ import (
 )
 
 func main() {
-	// Tree A: users who signed up this month.
-	signups, err := fractaltree.New[int, string]()
+	signups := buildSignups()
+	purchases := buildPurchases()
+
+	mergeJoin(signups, purchases)
+	antiJoin(signups, purchases)
+}
+
+func buildSignups() *fractaltree.BETree[int, string] {
+	t, err := fractaltree.New[int, string]()
 	if err != nil {
 		log.Fatal(err)
 	}
+	t.Put(101, "alice")
+	t.Put(103, "charlie")
+	t.Put(105, "eve")
+	t.Put(107, "grace")
+	t.Put(109, "iris")
+	t.Put(111, "kate")
+	return t
+}
 
-	signups.Put(101, "alice")
-	signups.Put(103, "charlie")
-	signups.Put(105, "eve")
-	signups.Put(107, "grace")
-	signups.Put(109, "iris")
-	signups.Put(111, "kate")
-
-	// Tree B: users who made a purchase this month.
-	purchases, err := fractaltree.New[int, string]()
+func buildPurchases() *fractaltree.BETree[int, string] {
+	t, err := fractaltree.New[int, string]()
 	if err != nil {
 		log.Fatal(err)
 	}
+	t.Put(100, "external-buyer")
+	t.Put(103, "charlie")
+	t.Put(105, "eve")
+	t.Put(106, "frank")
+	t.Put(109, "iris")
+	t.Put(112, "liam")
+	return t
+}
 
-	purchases.Put(100, "external-buyer")
-	purchases.Put(103, "charlie")
-	purchases.Put(105, "eve")
-	purchases.Put(106, "frank")
-	purchases.Put(109, "iris")
-	purchases.Put(112, "liam")
-
-	// Merge join: find users who both signed up AND purchased.
+// mergeJoin finds users present in both trees using two cursors
+// advancing in lockstep.
+func mergeJoin(signups, purchases *fractaltree.BETree[int, string]) {
 	fmt.Println("=== Users who signed up AND purchased ===")
 	ca := signups.Cursor()
 	cb := purchases.Cursor()
@@ -48,39 +59,43 @@ func main() {
 
 	matches := 0
 	for aOk && bOk {
-		if ca.Key() == cb.Key() {
+		switch {
+		case ca.Key() == cb.Key():
 			fmt.Printf("  user %d: %s\n", ca.Key(), ca.Value())
 			matches++
 			aOk = ca.Next()
 			bOk = cb.Next()
-		} else if ca.Key() < cb.Key() {
+		case ca.Key() < cb.Key():
 			aOk = ca.Next()
-		} else {
+		default:
 			bOk = cb.Next()
 		}
 	}
 	fmt.Printf("\nTotal matches: %d (out of %d signups, %d purchasers)\n",
 		matches, signups.Len(), purchases.Len())
+}
 
-	// Anti-join: signups with NO purchase (left anti-join).
+// antiJoin finds signups with no corresponding purchase (left anti-join).
+func antiJoin(signups, purchases *fractaltree.BETree[int, string]) {
 	fmt.Println("\n=== Signed up but did NOT purchase ===")
-	ca2 := signups.Cursor()
-	cb2 := purchases.Cursor()
-	defer ca2.Close()
-	defer cb2.Close()
+	ca := signups.Cursor()
+	cb := purchases.Cursor()
+	defer ca.Close()
+	defer cb.Close()
 
-	aOk = ca2.Next()
-	bOk = cb2.Next()
+	aOk := ca.Next()
+	bOk := cb.Next()
 
 	for aOk {
-		if !bOk || ca2.Key() < cb2.Key() {
-			fmt.Printf("  user %d: %s\n", ca2.Key(), ca2.Value())
-			aOk = ca2.Next()
-		} else if ca2.Key() == cb2.Key() {
-			aOk = ca2.Next()
-			bOk = cb2.Next()
-		} else {
-			bOk = cb2.Next()
+		switch {
+		case !bOk || ca.Key() < cb.Key():
+			fmt.Printf("  user %d: %s\n", ca.Key(), ca.Value())
+			aOk = ca.Next()
+		case ca.Key() == cb.Key():
+			aOk = ca.Next()
+			bOk = cb.Next()
+		default:
+			bOk = cb.Next()
 		}
 	}
 }
