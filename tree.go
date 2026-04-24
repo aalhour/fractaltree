@@ -141,7 +141,7 @@ func (t *BETree[K, V]) putLocked(key K, value V, knownNew bool) {
 		t.size++
 	}
 
-	t.root.appendToBuffer(Message[K, V]{Kind: MsgPut, Key: key, Value: value, counted: isNew}, t.cmp)
+	t.root.appendToBuffer(Message[K, V]{Kind: MsgPut, Key: key, Value: value, counted: isNew})
 	if len(t.root.buffer) > t.params.bufferCap {
 		t.flushNode(t.root)
 		if len(t.root.children) > t.params.fanout {
@@ -252,7 +252,7 @@ func (t *BETree[K, V]) deleteLocked(key K) bool {
 	}
 	t.size--
 	t.pendingDeletes++
-	t.root.appendToBuffer(Message[K, V]{Kind: MsgDelete, Key: key}, t.cmp)
+	t.root.appendToBuffer(Message[K, V]{Kind: MsgDelete, Key: key})
 	if len(t.root.buffer) > t.params.bufferCap {
 		t.flushNode(t.root)
 		if len(t.root.children) > t.params.fanout {
@@ -335,7 +335,7 @@ func (t *BETree[K, V]) DeleteRange(lo, hi K) int {
 	for _, p := range pairs {
 		t.root.appendToBuffer(Message[K, V]{
 			Kind: MsgDelete, Key: p.key,
-		}, t.cmp)
+		})
 	}
 	if len(t.root.buffer) > t.params.bufferCap {
 		t.flushNode(t.root)
@@ -371,7 +371,7 @@ func (t *BETree[K, V]) Upsert(key K, fn UpsertFn[V]) {
 		return
 	}
 
-	t.root.appendToBuffer(Message[K, V]{Kind: MsgUpsert, Key: key, Fn: fn}, t.cmp)
+	t.root.appendToBuffer(Message[K, V]{Kind: MsgUpsert, Key: key, Fn: fn})
 	if len(t.root.buffer) > t.params.bufferCap {
 		t.flushNode(t.root)
 		if len(t.root.children) > t.params.fanout {

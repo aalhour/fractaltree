@@ -652,3 +652,123 @@ func newSmallTree(t *testing.T) *BETree[int, string] {
 	require.NoError(t, err)
 	return tree
 }
+
+// --- P3 (unsorted append + lazy sort) adversarial tests ---
+
+func TestP3_ReverseOrderInserts(t *testing.T) {
+	tree := newSmallTree(t)
+	// Insert in reverse order — buffer will be unsorted between flushes.
+	for i := 100; i > 0; i-- {
+		tree.Put(i, "v")
+	}
+	assert.Equal(t, 100, tree.Len())
+	for i := 1; i <= 100; i++ {
+		v, ok := tree.Get(i)
+		assert.True(t, ok, "key %d missing", i)
+		assert.Equal(t, "v", v)
+	}
+}
+
+func TestP3_InterleavedReadsAndWrites(t *testing.T) {
+	tree := newSmallTree(t)
+	// Interleave writes and reads to test unsorted buffer reads.
+	for i := range 50 {
+		tree.Put(i*3, "a")   // sparse keys
+		tree.Put(i*3+2, "c") // out of order within buffer
+		tree.Put(i*3+1, "b")
+		// Read before flush forces linear scan on unsorted buffer.
+		v, ok := tree.Get(i * 3)
+		assert.True(t, ok, "key %d missing after put", i*3)
+		assert.Equal(t, "a", v)
+	}
+	assert.Equal(t, 150, tree.Len())
+}
+
+func TestP3_DuplicateKeyOverwrite(t *testing.T) {
+	tree := newSmallTree(t)
+	// Many overwrites of the same key — all land in buffer before flush.
+	for i := range 20 {
+		tree.Put(1, "v"+string(rune('a'+i)))
+	}
+	assert.Equal(t, 1, tree.Len())
+	v, ok := tree.Get(1)
+	assert.True(t, ok)
+	assert.Equal(t, "v"+string(rune('a'+19)), v) // last write wins
+}
+
+func TestP3_DeleteBeforeFlush(t *testing.T) {
+	tree := newSmallTree(t)
+	tree.Put(1, "a")
+	tree.Put(2, "b")
+	tree.Put(3, "c")
+	// Delete before buffer flushes.
+	assert.True(t, tree.Delete(2))
+	assert.Equal(t, 2, tree.Len())
+	_, ok := tree.Get(2)
+	assert.False(t, ok)
+	// Remaining keys intact.
+	v, ok := tree.Get(1)
+	assert.True(t, ok)
+	assert.Equal(t, "a", v)
+	v, ok = tree.Get(3)
+	assert.True(t, ok)
+	assert.Equal(t, "c", v)
+}
+
+func TestP3_UpsertChainInUnsortedBuffer(t *testing.T) {
+	tree, err := New[int, int](WithBlockSize(4), WithEpsilon(0.5))
+	require.NoError(t, err)
+	tree.Put(1, 10)
+	// Multiple upserts accumulate in unsorted buffer.
+	for range 5 {
+		tree.Upsert(1, func(existing *int, exists bool) int {
+			if exists {
+				return *existing + 1
+			}
+			return 0
+		})
+	}
+	v, ok := tree.Get(1)
+	assert.True(t, ok)
+	assert.Equal(t, 15, v) // 10 + 5 increments
+}
+
+func TestP3_RangeOnUnsortedBuffer(t *testing.T) {
+	tree := newSmallTree(t)
+	// Insert in reverse order so buffer is unsorted.
+	for i := 10; i > 0; i-- {
+		tree.Put(i, "v")
+	}
+	// Range query must still return correct sorted results.
+	var keys []int
+	for k := range tree.Range(3, 8) {
+		keys = append(keys, k)
+	}
+	assert.Equal(t, []int{3, 4, 5, 6, 7}, keys)
+}
+
+func TestP3_LargeBufferCorrectness(t *testing.T) {
+	// Use default tree (bufferCap=4096) — much larger buffer than before.
+	tree := newTestTree(t)
+	n := 50_000
+	perm := rand.Perm(n)
+	for _, i := range perm {
+		tree.Put(i, "v")
+	}
+	assert.Equal(t, n, tree.Len())
+	// Verify all keys present.
+	for i := range n {
+		v, ok := tree.Get(i)
+		assert.True(t, ok, "key %d missing", i)
+		assert.Equal(t, "v", v)
+	}
+	// Verify ascending order via iterator.
+	prev := -1
+	count := 0
+	for k := range tree.All() {
+		assert.Greater(t, k, prev)
+		prev = k
+		count++
+	}
+	assert.Equal(t, n, count)
+}

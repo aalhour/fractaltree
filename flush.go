@@ -44,7 +44,6 @@ func (t *BETree[K, V]) flushNode(n *node[K, V]) {
 	clear(n.buffer[k:]) // zero trailing slots for GC
 	n.buffer = n.buffer[:k]
 	n.bufferSorted = false
-	n.sortBuffer(t.cmp)
 
 	child := n.children[heaviest]
 	if child.leaf {
@@ -55,7 +54,6 @@ func (t *BETree[K, V]) flushNode(n *node[K, V]) {
 	} else {
 		child.buffer = append(child.buffer, buckets[heaviest]...)
 		child.bufferSorted = false
-		child.sortBuffer(t.cmp)
 		if len(child.buffer) > t.params.bufferCap {
 			t.flushNode(child)
 		}
@@ -419,10 +417,10 @@ func (t *BETree[K, V]) splitInternalChild(parent *node[K, V], childIdx int) {
 
 	child.pivots = child.pivots[:mid]
 	child.children = child.children[:mid+1]
+	wasSorted := child.bufferSorted
 	child.buffer = leftBuf
-	// Both halves preserve sorted order since the partition is by a single pivot.
-	child.bufferSorted = true
-	right.bufferSorted = true
+	child.bufferSorted = wasSorted
+	right.bufferSorted = wasSorted
 
 	parent.pivots = slices.Insert(parent.pivots, childIdx, pivot)
 	parent.children = slices.Insert(parent.children, childIdx+1, right)

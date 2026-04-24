@@ -21,63 +21,51 @@ type node[K any, V any] struct {
 	values []V
 }
 
-// sortBuffer sorts the buffer by key using stable sort, then marks it sorted.
-// Caller must hold the tree write lock.
-func (n *node[K, V]) sortBuffer(cmp func(K, K) int) {
-	if n.bufferSorted || len(n.buffer) <= 1 {
-		return
-	}
-	slices.SortStableFunc(n.buffer, func(a, b Message[K, V]) int {
-		return cmp(a.Key, b.Key)
-	})
-	n.bufferSorted = true
+// appendToBuffer appends a message to the buffer and marks it unsorted.
+// The caller is responsible for calling sortBuffer when the buffer needs
+// to be sorted (typically before flush or at the end of a write batch).
+func (n *node[K, V]) appendToBuffer(msg Message[K, V]) {
+	n.buffer = append(n.buffer, msg)
+	n.bufferSorted = len(n.buffer) <= 1
 }
 
-// appendToBuffer inserts a message at its sorted position, maintaining the
-// sorted invariant. Caller must hold the tree write lock.
-func (n *node[K, V]) appendToBuffer(msg Message[K, V], cmp func(K, K) int) {
-	if !n.bufferSorted || len(n.buffer) == 0 {
-		n.buffer = append(n.buffer, msg)
-		n.bufferSorted = len(n.buffer) <= 1
-		if !n.bufferSorted {
-			n.sortBuffer(cmp)
-		}
-		return
-	}
-	// Insert at sorted position. Same-key messages go after existing ones
-	// (newest last) by using <= 0 comparison.
-	pos, _ := slices.BinarySearchFunc(n.buffer, msg.Key, func(m Message[K, V], k K) int {
-		return cmp(m.Key, k)
-	})
-	// Find the end of the key group to insert after all existing same-key msgs.
-	for pos < len(n.buffer) && cmp(n.buffer[pos].Key, msg.Key) == 0 {
-		pos++
-	}
-	n.buffer = slices.Insert(n.buffer, pos, msg)
-}
-
-// bufferMessagesForKey returns all messages for key in the sorted buffer.
-// Within the returned slice, messages are in insertion order (oldest first).
+// bufferMessagesForKey returns all messages for key in the buffer.
+// When the buffer is sorted, uses binary search (O(log B)). When unsorted
+// (between flushes), falls back to linear scan (O(B)). The linear fallback
+// is safe under RLock since it doesn't mutate the buffer.
 func (n *node[K, V]) bufferMessagesForKey(key K, cmp func(K, K) int) []Message[K, V] {
-	i, found := slices.BinarySearchFunc(n.buffer, key, func(m Message[K, V], k K) int {
-		return cmp(m.Key, k)
-	})
-	if !found {
-		return nil
+	if n.bufferSorted {
+		i, found := slices.BinarySearchFunc(n.buffer, key, func(m Message[K, V], k K) int {
+			return cmp(m.Key, k)
+		})
+		if !found {
+			return nil
+		}
+		end := i + 1
+		for end < len(n.buffer) && cmp(n.buffer[end].Key, key) == 0 {
+			end++
+		}
+		return n.buffer[i:end]
 	}
-	end := i + 1
-	for end < len(n.buffer) && cmp(n.buffer[end].Key, key) == 0 {
-		end++
+	// Linear scan when unsorted — safe under RLock.
+	var msgs []Message[K, V]
+	for i := range n.buffer {
+		if cmp(n.buffer[i].Key, key) == 0 {
+			msgs = append(msgs, n.buffer[i])
+		}
 	}
-	return n.buffer[i:end]
+	return msgs
 }
 
-// bufferSlice returns the sub-slice of the sorted buffer containing messages
-// whose keys fall in the range defined by lo/hi with inclusivity flags.
-// The buffer must already be sorted.
+// bufferSlice returns messages whose keys fall in the range defined by
+// lo/hi with inclusivity flags. When sorted, uses binary search for O(log B)
+// bounds. When unsorted, falls back to linear scan (safe under RLock).
 func (n *node[K, V]) bufferSlice(lo, hi K, loInc, hiInc bool, cmp func(K, K) int) []Message[K, V] {
 	if len(n.buffer) == 0 {
 		return nil
+	}
+	if !n.bufferSorted {
+		return n.bufferSliceScan(lo, hi, loInc, hiInc, cmp)
 	}
 	start, _ := slices.BinarySearchFunc(n.buffer, lo, func(m Message[K, V], k K) int {
 		return cmp(m.Key, k)
@@ -99,6 +87,25 @@ func (n *node[K, V]) bufferSlice(lo, hi K, loInc, hiInc bool, cmp func(K, K) int
 		return nil
 	}
 	return n.buffer[start:end]
+}
+
+// bufferSliceScan is the linear-scan fallback for bufferSlice when the
+// buffer is unsorted. Safe under RLock since it doesn't mutate.
+func (n *node[K, V]) bufferSliceScan(
+	lo, hi K, loInc, hiInc bool, cmp func(K, K) int,
+) []Message[K, V] {
+	var msgs []Message[K, V]
+	for i := range n.buffer {
+		k := n.buffer[i].Key
+		cLo := cmp(k, lo)
+		cHi := cmp(k, hi)
+		inLo := (loInc && cLo >= 0) || (!loInc && cLo > 0)
+		inHi := (hiInc && cHi <= 0) || (!hiInc && cHi < 0)
+		if inLo && inHi {
+			msgs = append(msgs, n.buffer[i])
+		}
+	}
+	return msgs
 }
 
 // newLeaf creates an empty leaf node with preallocated capacity.

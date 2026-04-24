@@ -73,14 +73,10 @@ type treeParams struct {
 func deriveParams(o options) treeParams {
 	b := float64(o.blockSize)
 	fanout := int(math.Pow(b, o.epsilon))
-	bufferCap := int(math.Pow(b, 1-o.epsilon))
 
-	if fanout < minFanout {
-		fanout = minFanout
-	}
-	if bufferCap < minBufferCap {
-		bufferCap = minBufferCap
-	}
+	fanout = max(fanout, minFanout)
+	bufferCap := int(math.Pow(b, 1-o.epsilon))
+	bufferCap = max(bufferCap, minBufferCap)
 
 	return treeParams{
 		epsilon:   o.epsilon,
