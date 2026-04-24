@@ -35,7 +35,7 @@ func BenchmarkCompare_Put(b *testing.B) {
 			b.Run("FractalTree", func(b *testing.B) {
 				b.ReportAllocs()
 				for range b.N {
-					t, _ := fractaltree.New[int, int]()
+					t, _ := fractaltree.New[int, int](fractaltree.WithBlockSize(63))
 					for i := range n {
 						t.Put(i, i)
 					}
@@ -57,7 +57,7 @@ func BenchmarkCompare_Put(b *testing.B) {
 				b.ReportAllocs()
 				b.ResetTimer()
 				for range b.N {
-					t, _ := fractaltree.New[int, int]()
+					t, _ := fractaltree.New[int, int](fractaltree.WithBlockSize(63))
 					for _, k := range keys {
 						t.Put(k, k)
 					}
@@ -82,7 +82,7 @@ func BenchmarkCompare_Put(b *testing.B) {
 func BenchmarkCompare_Get(b *testing.B) {
 	const n = 100_000
 
-	ft, _ := fractaltree.New[int, int]()
+	ft, _ := fractaltree.New[int, int](fractaltree.WithBlockSize(63))
 	gt := btree.New(32)
 	for i := range n {
 		ft.Put(i, i)
@@ -136,7 +136,7 @@ func BenchmarkCompare_Get(b *testing.B) {
 func BenchmarkCompare_Range(b *testing.B) {
 	const n = 100_000
 
-	ft, _ := fractaltree.New[int, int]()
+	ft, _ := fractaltree.New[int, int](fractaltree.WithBlockSize(63))
 	gt := btree.New(32)
 	for i := range n {
 		ft.Put(i, i)
@@ -173,7 +173,7 @@ func BenchmarkCompare_Range(b *testing.B) {
 func BenchmarkCompare_MixedReadHeavy(b *testing.B) {
 	const n = 100_000
 
-	ft, _ := fractaltree.New[int, int]()
+	ft, _ := fractaltree.New[int, int](fractaltree.WithBlockSize(63))
 	gt := btree.New(32)
 	for i := range n {
 		ft.Put(i, i)
@@ -214,7 +214,7 @@ func BenchmarkCompare_MixedReadHeavy(b *testing.B) {
 func BenchmarkCompare_MixedWriteHeavy(b *testing.B) {
 	const n = 100_000
 
-	ft, _ := fractaltree.New[int, int]()
+	ft, _ := fractaltree.New[int, int](fractaltree.WithBlockSize(63))
 	gt := btree.New(32)
 	for i := range n {
 		ft.Put(i, i)
@@ -258,7 +258,7 @@ func BenchmarkCompare_Delete(b *testing.B) {
 	b.Run("FractalTree", func(b *testing.B) {
 		for range b.N {
 			b.StopTimer()
-			t, _ := fractaltree.New[int, int]()
+			t, _ := fractaltree.New[int, int](fractaltree.WithBlockSize(63))
 			for i := range n {
 				t.Put(i, i)
 			}
