@@ -13,6 +13,7 @@ This document records significant design decisions in the `fractaltree` library.
 | [ADR-001](#adr-001-batch-leaf-merge) | Batch Leaf Merge in `applyToLeaf` | Accepted | 2026-04-12 | `flush.go` (v0.3.0) |
 | [ADR-002](#adr-002-optimistic-size-tracking) | Optimistic Size Tracking with Deferred Correction | Accepted | 2026-04-12 | `tree.go`, `flush.go` (v0.2.0+) |
 | [ADR-003](#adr-003-greedy-flush-with-reusable-buckets) | Greedy Flush with Reusable Buckets | Accepted | 2026-04-12 | `flush.go`, `node.go` (v0.2.1) |
+| [ADR-004](#adr-004-unsorted-buffer-append-with-lazy-sort) | Unsorted Buffer Append with Lazy Sort | Accepted | 2026-04-24 | `node.go`, `flush.go` (v0.4.0) |
 
 ---
 
@@ -190,3 +191,72 @@ When an internal node's buffer is full, `flushNode` partitions messages by child
 - Put/Random/1M: **-36%** wall time, **-99%** B/op, **-99.96%** allocs/op.
 - The `flushBuckets` field adds one pointer per internal node. For a tree with thousands of internal nodes, this is negligible.
 - Bucket slices grow monotonically (never shrunk). If a node has a transient spike in child count due to splits, the bucket slice retains the high-water mark. This is acceptable because splits increase child count by 1 and the slice holds only pointers.
+
+---
+
+## ADR-004: Unsorted Buffer Append with Lazy Sort
+
+**Status:** Accepted | **Date:** 2026-04-24 | **Applies to:** `node.go`, `flush.go` (v0.4.0)
+
+### Context
+
+After P2 (batch leaf merge), `runtime.memmove` via `slices.Insert` in `appendToBuffer` was the #1 CPU bottleneck at 16.0% of total. Every `Put` inserted the message into the node's buffer in sorted position — O(log B) binary search + O(B) memmove per insert. At the default `bufferCap=64` (B^{1-ε}, ε=0.5), each insert memmoved ~32 × 48-byte Message structs (~1.5 KB). The write path paid this cost on every single insert, even though sorted order is only needed at flush time (for `resolveMessages`) and at read time (for `bufferMessagesForKey` / `bufferSlice`).
+
+No production B^ε-tree uses sorted insertion into the message buffer. PerconaFT uses unsorted append into a byte array with a separate sorted index (OMT). The reference Be-Tree (oscarlab) uses `std::map`. Google BTree uses sorted slices but bounds node size at ~63 elements.
+
+### Decision
+
+Replace sorted insertion with **unsorted O(1) append** and **no eager sorting**. Three coordinated changes:
+
+#### 1. `appendToBuffer`: O(1) unsorted append
+
+The old `appendToBuffer(msg, cmp)` did binary search + `slices.Insert`. The new `appendToBuffer(msg)` does `append(n.buffer, msg)` and sets `n.bufferSorted = false`. No comparator needed — the write path never examines key order.
+
+#### 2. Linear-scan fallback for read paths
+
+`bufferMessagesForKey` and `bufferSlice` check `n.bufferSorted`. When sorted (rare — only after a split partitions by pivot), they use the existing binary search path. When unsorted (common), they fall back to O(B) linear scan. This is safe under `RLock` because it doesn't mutate the buffer.
+
+The linear scan trades O(log B) reads for O(B) reads. At B=64, this is 64 comparisons vs 6 — a ~10x per-node read cost increase. Across a tree of depth ~3, the total read regression is bounded. This is acceptable for a write-optimized data structure.
+
+#### 3. No sorting in `flushNode`
+
+The key insight: `flushNode` does not need a sorted buffer. Message partitioning (routing each message to a child via `findChildIndex`) is per-message and order-independent. The sort only matters when messages reach a leaf — and `resolveMessages` (inside `applyToLeaf`) already sorts the batch before merging.
+
+The original P3 implementation sorted the buffer at two points in `flushNode`: after compacting unflushed messages (parent), and after appending flushed messages to a child. Profiling showed these sorts consumed **19.4% of CPU** — worse than the 16% memmove they replaced. Removing both sorts eliminated the regression entirely.
+
+`splitInternalChild` partitions the buffer by pivot. The partition preserves the relative order within each half, so the `bufferSorted` flag is propagated unchanged to both halves.
+
+### Alternatives Considered
+
+| ID | Alternative | Verdict | Reason |
+|:---|:-----------|:--------|:-------|
+| A1 | Unsorted append + sort at flush time (P3v1) | Rejected after bench | Sorting 64-element buffer of 48-byte structs at flush time cost 19.4% CPU — worse than the 16% memmove it replaced. `SortStableFunc` uses function-pointer comparisons (no inlining) and merge sort internals (symMerge, rotate) that thrash cache on 48-byte swaps. |
+| A2 | bufferCap = B = 4096 (paper-prescribed) | Rejected after bench | Sorting 4096 elements at flush time caused +46% write regression and +1973% read regression (linear scan on 4096 elements). Larger buffers also increased memory 85-239%. |
+| A3 | Sort after every write | Rejected after bench | O(B log B) per insert is worse than O(B) memmove. Put/Random/100K regressed from 56ms to 3200ms. |
+| A4 | Sorted int index (P3b from roadmap) | Deferred | Medium complexity. Only needed if the linear-scan read regression proves unacceptable in practice. Current read regression is 5-11%, acceptable for a write-optimized tree. |
+| A5 | `sort.Slice` (unstable sort) | Rejected | Same-key messages must preserve insertion order for correct resolution (newest wins). Unstable sort would reorder same-key messages, breaking the semantic. |
+
+### Consequences
+
+**Positive:**
+
+- Write path neutral (within noise of baseline). The 16% memmove cost is eliminated with no replacement overhead.
+- Range queries 75-99% faster (from other changes between baseline capture and this version, not P3 specifically, but validated in this benchmark run).
+- Upsert 16% faster.
+- Zero allocation regression on write path.
+- `sortBuffer` method removed — dead code eliminated.
+- Simpler write path: `appendToBuffer` is now 2 lines with no comparator parameter.
+
+**Negative:**
+
+- Get/Hit: +9.5% regression (linear scan on unsorted root buffer).
+- Get/Miss: +5.6% regression.
+- Delete: +11.1% regression (Delete calls `getFromNode` which hits the linear scan).
+- `bufferMessagesForKey` and `bufferSlice` allocate per-call when unsorted (collecting matches into a new slice). Baseline had zero-alloc binary search returning a sub-slice.
+
+**Invariants to maintain:**
+
+1. **`bufferSorted` flag accuracy.** `appendToBuffer` sets it false. `splitInternalChild` propagates the parent's flag. No other code sets it true (the only former setter, `sortBuffer`, is removed).
+2. **`resolveMessages` sorts before dedup.** This is the only sort in the write path — it runs inside `applyToLeaf` when messages reach a leaf. It must remain a stable sort to preserve same-key message order.
+3. **Linear scan fallback correctness.** `bufferMessagesForKey` and `bufferSliceScan` must return all matching messages regardless of buffer order. They must not mutate the buffer (safe under `RLock`).
+4. **`flushNode` partition is order-independent.** Each message is routed to a child via `findChildIndex` — this does not depend on buffer sort order.
