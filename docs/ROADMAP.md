@@ -178,48 +178,90 @@ The Mixed regression (+7.5%) is a trade-off: the batch merge adds sort+dedup ove
 
 ---
 
-## Performance Optimizations (Remaining)
+## Category A: Gaps from the Research (all completed)
 
-### P3: Index the message buffer for faster lookups
+Items where the current implementation deviated from the algorithms described in Brodal & Fagerberg (SODA 2003), Bender et al. (SPAA 2007), and Kuszmaul (Tokutek 2014). All four items have been implemented.
 
-**Problem.** `getFromNode` scans the buffer linearly backwards (`tree.go:188`). For buffer capacity 64 (default), this is up to 64 comparisons per internal node per read. With a 3-level tree, that's ~192 comparisons per `Get`. `cmp.Compare` is the **#2 CPU cost at 10.0%**, called from both `findChildIndex` and `leafSearch` — buffer indexing would reduce the `findChildIndex` calls during read-path buffer scans.
+### A1: Streaming range iterator (algorithmic correctness) &mdash; Done
 
-**Location.** `tree.go:188` — `for i := len(n.buffer) - 1; i >= 0; i--`
+Replaced `materializeRange` with a collect-and-merge approach. `collectRange` descends the tree collecting buffer messages and leaf entries as `mergeEntry` structs with depth information. `resolveEntries` sorts by (key, depth) and resolves same-key groups across depth levels, handling Put/Delete/Upsert interactions. Range scan gap vs Google BTree narrowed from 27&ndash;1,843x to 5&ndash;7x.
+
+### A2: Sorted buffer with binary search on reads &mdash; Done
+
+Buffers are now maintained in sorted order. `appendToBuffer` inserts at the correct sorted position (O(log B) binary search + O(B) memmove). `bufferMessagesForKey` uses binary search for O(log B) lookups. `bufferSlice` extracts range sub-slices via binary search for efficient range iteration.
+
+### A3: Buffered Upsert messages &mdash; Done
+
+Added `MsgUpsert` message kind carrying `UpsertFn`. Upserts are buffered as messages and resolved lazily during flush via `applyToLeaf`. `getWithUpserts` collects upsert functions from buffers on the root-to-leaf path and applies them as a chain. Handles: multiple upserts on same key, upsert after delete, upsert after put.
+
+### A4: Buffered DeleteRange messages &mdash; Done
+
+After exploring true `MsgDeleteRange` buffering (fan-out to children, sequence-number ordering), discovered a fundamental correctness issue: leaf values lack sequence numbers, making it impossible to resolve range deletes against leaf values after partial flushes. Settled on expanding range deletes to individual `MsgDelete` entries using the iterator infrastructure at `DeleteRange` call time. This is O(K) instead of O(1) but correct and simpler than the previous approach which called `deleteLocked` per key (each doing a full `getFromNode` traversal).
+
+---
+
+## Category B: Performance Optimizations
+
+Items that improve performance without changing algorithmic behavior. Informed by profiling v0.3.0 on Apple M2 Max / Go 1.26.
+
+### B1: Eliminate materialization in range queries (depends on A1)
+
+**Problem.** Even ignoring the algorithmic issue, `materializeRange` allocates a `[]K` candidate slice (49 MB) and a `[]kvPair` result slice (36 MB). These are the #3 and #4 memory costs.
+
+**Fix.** Streaming iteration (A1) eliminates both allocations entirely — pairs are yielded one at a time.
+
+### B2: Reduce `splitLeafChild` allocations
+
+**Problem.** `splitLeafChild` allocates new key/value slices for the right sibling. This is 13.6% of alloc_space (75 MB in profile).
 
 **Options.**
-1. **Sorted buffer + binary search.** Maintain buffer in sorted order by key. Insertion becomes O(log B) instead of O(1), but lookups drop from O(B) to O(log B). Net win if reads outnumber flushes.
-2. **Per-node key index.** A `map[K]int` mapping keys to their latest buffer position. O(1) lookup, but map overhead and GC load from pointers.
-3. **Keep unsorted, batch sort on flush.** Current approach. Acceptable if reads are infrequent relative to writes.
+1. **Pre-allocate leaf backing arrays at node creation.** Wastes memory for mostly-empty leaves.
+2. **Arena/slab allocator for leaf slices.** Amortizes allocation across many splits.
+3. **Copy-on-write leaves.** Share backing array, split only on mutation. Adds complexity.
 
-**Impact.** Faster `Get`, `Contains`, and the existence check in `putLocked` when `pendingDeletes > 0`. Most impactful for read-heavy or mixed workloads.
+**Impact.** Moderate. Splits are unavoidable — this only reduces the per-split cost.
 
-### P4: Avoid `defer` in hot-path methods
+### B3: Avoid `defer` in hot-path methods
 
-**Problem.** `Put`, `Get`, `Len` use `defer t.mu.Unlock()` which prevents the compiler from inlining the outer function. While `defer` is cheap (~30ns on modern Go), inlining the caller could enable further optimizations.
+**Problem.** `Put`, `Get`, `Len` use `defer t.mu.Unlock()`. While cheap (~30ns), it prevents inlining.
 
 **Location.** `tree.go:103-104`, `tree.go:168-169`, `tree.go:243-244`
 
-**Option.** Replace `defer` with explicit unlock before each return. Adds maintenance risk (missed unlocks on new code paths), so only worth it if profiling shows the defer overhead is material relative to the operation cost.
+**Impact.** Minor. Only measurable for very small trees. Low priority.
 
-**Impact.** Minor. Only measurable for very small trees where the lock/unlock dominates.
+---
+
+## Category C: Benchmark Improvements
+
+### C1: Add write-heavy mixed benchmark (80% write, 20% read) &mdash; Done
+
+Added `BenchmarkMixed/WriteHeavy` (80% writes, 20% reads) alongside the existing `BenchmarkMixed/ReadHeavy`. Added corresponding `BenchmarkCompare_MixedWriteHeavy` in the cross-implementation suite.
+
+### C2: Add batch insert benchmark
+
+Measure the amortized cost of inserting N pre-generated keys. The B^ε-tree's amortized write bound should dominate for large batches. Current benchmarks measure per-key insertion time, which includes flush overhead but doesn't capture the batch amortization clearly.
+
+### C3: Add sequential-insert-then-random-read benchmark
+
+Common pattern: append-log-then-query. This should be the B^ε-tree's sweet spot — fast sequential writes (append fast-path), followed by point reads in a fully-flushed tree.
+
+### C4: Add upsert/increment-heavy benchmark
+
+Counter and accumulator workloads. Once A3 (buffered upsert) is implemented, this should show the B^ε-tree's advantage over B-trees (which must read-modify-write).
+
+### C5: Reclassify Google BTree comparison &mdash; Done
+
+Reorganized the comparison in `docs/PERFORMANCE.md` and `README.md` into three sections by design point: **B^ε-tree design point** (sequential writes, allocation efficiency), **B-tree design point** (random in-memory writes, range scans), and **Neutral ground** (point reads, deletes, mixed workloads). Updated all benchmark numbers to reflect A1&ndash;A4 changes.
+
+### C6: Add write amplification measurement
+
+The research (Kuszmaul 2014) frames the comparison in terms of write amplification, read amplification, and space amplification. Current benchmarks only measure wall time and allocations. Adding a write-amplification counter (total bytes written to leaves / bytes inserted by user) would directly validate the B^ε-tree's theoretical advantage.
 
 ---
 
 ## Feature Work
 
-### F1: Buffered Upsert messages
-
-Currently, `Upsert` does an eager read-modify-write (read current value, apply function, put result). A true B-epsilon-tree buffers `MsgUpsert` messages and resolves them during flush. This would make `Upsert` as fast as `Put` — no read required.
-
-**Complexity.** Moderate. Requires storing `UpsertFn` in the message, chaining multiple upsert messages during resolution, and handling the absent-key case at apply time.
-
-### F2: Buffered DeleteRange messages
-
-Currently, `DeleteRange` eagerly collects candidate keys and deletes them one by one. A buffered `MsgDeleteRange` would be inserted into the root buffer and resolved during flush, making range deletion O(1) at insertion time.
-
-**Complexity.** Moderate. Requires range-aware message resolution during flush and read path (checking whether a key falls within any pending delete range).
-
-### F3: Real disk persistence via `Flusher`
+### F1: Real disk persistence via `Flusher`
 
 `DiskBETree` currently wraps `BETree` with lifecycle hooks but does not actually persist nodes to disk. Implement a file-backed `Flusher` that:
 - Assigns stable node IDs
@@ -227,30 +269,53 @@ Currently, `DeleteRange` eagerly collects candidate keys and deletes them one by
 - Lazily loads nodes from disk on read (LRU cache of hot nodes)
 - Supports `Sync` via `fsync`
 
-### F4: WAL (Write-Ahead Log)
+### F2: WAL (Write-Ahead Log)
 
-For crash recovery, write messages to a WAL before buffering them in memory. On recovery, replay the WAL to reconstruct the in-memory state. Pairs with F3.
+For crash recovery, write messages to a WAL before buffering them in memory. On recovery, replay the WAL to reconstruct the in-memory state. Pairs with F1.
 
-### F5: Snapshots and MVCC
+### F3: Snapshots and MVCC
 
-Support point-in-time snapshots for consistent reads without blocking writers. This enables MVCC (multi-version concurrency control) for database use cases.
+Support point-in-time snapshots for consistent reads without blocking writers. This enables MVCC (multi-version concurrency control) for database use cases. Kuszmaul (2014) lists MVCC as a key practical feature of TokuDB.
 
-### F6: Bulk loading
+### F4: Bulk loading
 
 Specialized constructor that accepts pre-sorted input and builds the tree bottom-up without going through the buffer/flush path. Would make `BulkLoad(iter.Seq2[K,V])` significantly faster than sequential `Put` for initial data loading.
 
-### F7: Merge iterator
+### F5: Merge iterator
 
 An `iter.Seq2` that merges multiple trees in sorted order, useful for distributed or sharded setups. The `mergejoin` example demonstrates the pattern with cursors; a dedicated merge iterator would be more ergonomic.
 
-### F8: Configurable flush strategy
+### F6: Configurable flush strategy
 
-Currently, flush always picks the heaviest child (greedy). Alternative strategies:
+Currently, flush always picks the heaviest child (greedy), as required by the amortized complexity proof. Alternative strategies for specific use cases:
 - **Round-robin** — fairer distribution, avoids hot-child starvation
 - **Threshold-based** — only flush children whose bucket exceeds a minimum size
 - **Full flush** — push to all children at once (simpler, higher write amplification)
 
-Expose as a `WithFlushStrategy` option.
+Expose as a `WithFlushStrategy` option. Note: only greedy flush preserves the theoretical O(log_B N / B^(1-ε)) amortized bound.
+
+### F7: Compression
+
+Kuszmaul (2014): "compression works very well for FT indexes, and can dramatically reduce write amplification." Leaf and buffer compression (snappy/zstd) would reduce I/O for disk-backed mode and memory footprint for large in-memory trees.
+
+---
+
+## Priority Order
+
+| Priority | Item | Category | Status |
+|:---------|:-----|:---------|:-------|
+| ~~1~~ | ~~A2: Sorted buffer + binary search~~ | Research gap | **Done** |
+| ~~2~~ | ~~A1: Streaming range iterator~~ | Research gap | **Done** |
+| ~~3~~ | ~~A3: Buffered Upsert messages~~ | Research gap | **Done** |
+| ~~4~~ | ~~C1+C5: Write-heavy benchmarks + reclassify comparison~~ | Benchmarks | **Done** |
+| ~~5~~ | ~~A4: Buffered DeleteRange~~ | Research gap | **Done** |
+| **6** | C6: Write amplification measurement | Benchmarks | Open |
+| **7** | B2: Reduce splitLeafChild allocations | Performance | Open |
+| **8** | F1: Disk persistence | Feature | Open |
+| **9** | F2: WAL | Feature | Open |
+| **10** | F3: MVCC | Feature | Open |
+
+All research gaps (A1&ndash;A4) and benchmark improvements (C1+C5) are complete. Remaining work is performance optimization (B2), benchmarking (C6), and feature work (F1&ndash;F7).
 
 ---
 

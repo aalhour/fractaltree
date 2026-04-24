@@ -43,6 +43,8 @@ func (t *BETree[K, V]) flushNode(n *node[K, V]) {
 	}
 	clear(n.buffer[k:]) // zero trailing slots for GC
 	n.buffer = n.buffer[:k]
+	n.bufferSorted = false
+	n.sortBuffer(t.cmp)
 
 	child := n.children[heaviest]
 	if child.leaf {
@@ -52,6 +54,8 @@ func (t *BETree[K, V]) flushNode(n *node[K, V]) {
 		}
 	} else {
 		child.buffer = append(child.buffer, buckets[heaviest]...)
+		child.bufferSorted = false
+		child.sortBuffer(t.cmp)
 		if len(child.buffer) > t.params.bufferCap {
 			t.flushNode(child)
 		}
@@ -97,8 +101,23 @@ func (t *BETree[K, V]) applyToLeaf(leaf *node[K, V], msgs []Message[K, V]) {
 	}
 	t.pendingDeletes -= numDeletes
 
-	// Phase 2: Stable-sort by key; deduplicate keeping last message per key.
+	// Phase 2: Stable-sort by key; deduplicate and fold upsert chains.
 	msgs = t.resolveMessages(msgs)
+
+	// Phase 2b: Resolve remaining MsgUpsert messages against leaf values.
+	for i := range msgs {
+		if msgs[i].Kind != MsgUpsert {
+			continue
+		}
+		idx, found := leaf.leafSearch(msgs[i].Key, t.cmp)
+		if found {
+			msgs[i].Value = msgs[i].Fn(&leaf.values[idx], true)
+		} else {
+			msgs[i].Value = msgs[i].Fn(nil, false)
+		}
+		msgs[i].Kind = MsgPut
+		msgs[i].Fn = nil
+	}
 
 	// Phase 3: Merge resolved messages into the leaf.
 	oldLen := len(leaf.keys)
@@ -134,16 +153,23 @@ func (t *BETree[K, V]) applyToLeafSmall(leaf *node[K, V], msgs []Message[K, V]) 
 		case MsgDelete:
 			leaf.leafDelete(msgs[i].Key, t.cmp)
 			t.pendingDeletes--
+		case MsgUpsert:
+			idx, found := leaf.leafSearch(msgs[i].Key, t.cmp)
+			if found {
+				leaf.values[idx] = msgs[i].Fn(&leaf.values[idx], true)
+			} else {
+				leaf.leafInsert(msgs[i].Key, msgs[i].Fn(nil, false), t.cmp)
+				t.size++
+			}
 		}
 	}
 }
 
-// resolveMessages sorts messages by key and deduplicates, keeping only the
-// last message per key (last writer wins). When the input is already sorted
-// with no duplicate keys the sort is skipped entirely — this is the common
-// case for flushes where each buffered key appears once.
+// resolveMessages sorts messages by key and deduplicates. For same-key groups
+// without upserts, the last message wins. For groups containing MsgUpsert,
+// the chain is folded: Put+Upsert resolves to Put, Delete+Upsert resolves to
+// Put, Upsert+Upsert composes into a single Upsert.
 func (t *BETree[K, V]) resolveMessages(msgs []Message[K, V]) []Message[K, V] {
-	// Fast check: skip sort if already sorted with no duplicate keys.
 	sorted := true
 	for i := 1; i < len(msgs); i++ {
 		if t.cmp(msgs[i-1].Key, msgs[i].Key) >= 0 {
@@ -156,16 +182,52 @@ func (t *BETree[K, V]) resolveMessages(msgs []Message[K, V]) []Message[K, V] {
 			return t.cmp(a.Key, b.Key)
 		})
 	}
-	// Deduplicate: keep last message per key (last writer wins).
 	n := 0
-	for i := range msgs {
-		if i+1 < len(msgs) && t.cmp(msgs[i].Key, msgs[i+1].Key) == 0 {
-			continue
+	i := 0
+	for i < len(msgs) {
+		j := i + 1
+		for j < len(msgs) && t.cmp(msgs[i].Key, msgs[j].Key) == 0 {
+			j++
 		}
-		msgs[n] = msgs[i]
+		if j == i+1 {
+			msgs[n] = msgs[i]
+		} else {
+			msgs[n] = t.resolveKeyGroup(msgs[i:j])
+		}
 		n++
+		i = j
 	}
 	return msgs[:n]
+}
+
+// resolveKeyGroup folds a same-key message group (oldest→newest) into one
+// message. Put/Delete are definitive; Upsert chains on the current state.
+// MsgDeleteRange entries are kept separate (not folded with point messages).
+func (t *BETree[K, V]) resolveKeyGroup(group []Message[K, V]) Message[K, V] {
+	result := group[0]
+	for i := 1; i < len(group); i++ {
+		switch group[i].Kind {
+		case MsgPut, MsgDelete:
+			result = group[i]
+		case MsgUpsert:
+			switch result.Kind {
+			case MsgPut:
+				result.Value = group[i].Fn(&result.Value, true)
+			case MsgDelete:
+				result.Value = group[i].Fn(nil, false)
+				result.Kind = MsgPut
+				result.counted = false
+			case MsgUpsert:
+				prev := result.Fn
+				curr := group[i].Fn
+				result.Fn = func(existing *V, exists bool) V {
+					base := prev(existing, exists)
+					return curr(&base, true)
+				}
+			}
+		}
+	}
+	return result
 }
 
 // appendToLeaf appends a sorted, deduplicated, puts-only batch whose first key
@@ -358,6 +420,9 @@ func (t *BETree[K, V]) splitInternalChild(parent *node[K, V], childIdx int) {
 	child.pivots = child.pivots[:mid]
 	child.children = child.children[:mid+1]
 	child.buffer = leftBuf
+	// Both halves preserve sorted order since the partition is by a single pivot.
+	child.bufferSorted = true
+	right.bufferSorted = true
 
 	parent.pivots = slices.Insert(parent.pivots, childIdx, pivot)
 	parent.children = slices.Insert(parent.children, childIdx+1, right)

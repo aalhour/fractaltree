@@ -285,23 +285,27 @@ All benchmarks on Apple M2 Max, 32 GB RAM, Go 1.26.2. Full results, Google BTree
 
 | Workload | Time | Allocs | Notes |
 |:---------|-----:|-------:|:------|
-| Put/Sequential/1M | 84 ms | 7,979 | Append fast-path |
-| Put/Random/1M | 864 ms | 4,925 | Batch merge |
-| Get/Hit (100K) | 17.9 ms | 0 | Zero-alloc reads |
-| Delete (100K) | 18.3 ms | 6 | In-place compaction |
-| Range/10K (100K tree) | 1.55 ms | 23 | Snapshot iterator |
-| Mixed 80/20 (100K) | 37.3 ms | 0 | |
+| Put/Sequential/1M | 114 ms | 7,980 | Append fast-path |
+| Put/Random/1M | 1,344 ms | 4,849 | Batch merge |
+| Get/Hit (100K) | 15.1 ms | 100,000 | Sorted buffer binary search |
+| Delete (100K) | 17.0 ms | 100,006 | Buffered deletes |
+| Range/10K (100K tree) | 383 &micro;s | 10,023 | Collect-and-merge iterator |
+| Mixed read-heavy (100K) | 34.8 ms | 80,000 | 80% reads, 20% writes |
+| Mixed write-heavy (100K) | 83.6 ms | 20,000 | 80% writes, 20% reads |
 
 ### vs Google BTree (highlights)
 
-| Benchmark | FractalTree | Google BTree | Winner |
-|:----------|------------:|-------------:|:-------|
-| Put/Sequential/100K | **6.6 ms** | 9.7 ms | FractalTree (0.68x) |
-| Put/Random/100K | 50.4 ms | 22.6 ms | Google BTree (2.23x) |
-| Get/Hit (100K) | **17.9 ms** | 21.3 ms | FractalTree (0.84x) |
-| Delete (100K) | 18.5 ms | 10.2 ms | Google BTree (1.81x) |
+The B&epsilon;-tree and B-tree have different design points. FractalTree wins on sequential writes and point reads; Google BTree wins on random in-memory writes and range scans.
 
-FractalTree achieves **99.6&ndash;100% fewer allocations** on most operations. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for the full comparison, range scan numbers, and analysis of when to choose each.
+| Benchmark | FractalTree | Google BTree | Design point |
+|:----------|------------:|-------------:|:-------------|
+| Put/Sequential/100K | **8.9 ms** | 9.7 ms | B&epsilon;-tree (0.92x) |
+| Put/Random/100K | 60.6 ms | 23.2 ms | B-tree (2.62x) |
+| Get/Hit (100K) | **15.5 ms** | 21.7 ms | Neutral (0.71x) |
+| Get/Miss (100K) | **5.1 ms** | 7.4 ms | Neutral (0.69x) |
+| Range/10K (100K tree) | 412 &micro;s | 58 &micro;s | B-tree (7.1x) |
+
+FractalTree achieves **99.6% fewer allocations** on write operations. See [docs/PERFORMANCE.md](docs/PERFORMANCE.md) for the full comparison with reclassified design-point analysis.
 
 ---
 

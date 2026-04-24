@@ -116,17 +116,35 @@ func BenchmarkMixed(b *testing.B) {
 	t := buildBenchTree(b)
 	keys := rand.Perm(n)
 
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		for i, k := range keys {
-			if i%5 == 0 {
-				t.Put(k, k+1)
-			} else {
-				t.Get(k)
+	b.Run("ReadHeavy", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			for i, k := range keys {
+				if i%5 == 0 {
+					t.Put(k, k+1)
+				} else {
+					t.Get(k)
+				}
 			}
 		}
-	}
+	})
+
+	b.Run("WriteHeavy", func(b *testing.B) {
+		t2 := buildBenchTree(b)
+		keys2 := rand.Perm(n)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			for i, k := range keys2 {
+				if i%5 < 4 {
+					t2.Put(k, k+1)
+				} else {
+					t2.Get(k)
+				}
+			}
+		}
+	})
 }
 
 // --- Upsert benchmark ---

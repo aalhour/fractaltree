@@ -141,7 +141,7 @@ func (t *BETree[K, V]) putLocked(key K, value V, knownNew bool) {
 		t.size++
 	}
 
-	t.root.buffer = append(t.root.buffer, Message[K, V]{Kind: MsgPut, Key: key, Value: value, counted: isNew})
+	t.root.appendToBuffer(Message[K, V]{Kind: MsgPut, Key: key, Value: value, counted: isNew}, t.cmp)
 	if len(t.root.buffer) > t.params.bufferCap {
 		t.flushNode(t.root)
 		if len(t.root.children) > t.params.fanout {
@@ -171,34 +171,63 @@ func (t *BETree[K, V]) Get(key K) (V, bool) {
 }
 
 // getFromNode recursively searches for key starting at the given node.
-// At each internal node, it checks the buffer for pending messages (newest
-// first). If a definitive message is found, it resolves immediately.
-// Otherwise it routes to the appropriate child.
+// At each internal node, it checks the buffer for pending messages.
+// MsgPut/MsgDelete resolve immediately; MsgUpsert messages are collected
+// and applied once a definitive base value is found.
 func (t *BETree[K, V]) getFromNode(n *node[K, V], key K) (V, bool) {
+	return t.getWithUpserts(n, key, nil)
+}
+
+func (t *BETree[K, V]) getWithUpserts(n *node[K, V], key K, fns []UpsertFn[V]) (V, bool) {
 	if n.leaf {
 		i, found := n.leafSearch(key, t.cmp)
 		if found {
-			return n.values[i], true
+			return applyUpsertChain(n.values[i], true, fns)
+		}
+		if len(fns) > 0 {
+			return applyUpsertChain(*new(V), false, fns)
 		}
 		var zero V
 		return zero, false
 	}
 
-	// Scan buffer backwards (newest message first).
-	for i := len(n.buffer) - 1; i >= 0; i-- {
-		if t.cmp(n.buffer[i].Key, key) == 0 {
-			switch n.buffer[i].Kind {
-			case MsgPut:
-				return n.buffer[i].Value, true
-			case MsgDelete:
-				var zero V
-				return zero, false
+	// Check all messages for this key in the buffer (oldest→newest order).
+	// Process newest→oldest: a definitive message resolves the chain.
+	msgs := n.bufferMessagesForKey(key, t.cmp)
+	for i := len(msgs) - 1; i >= 0; i-- {
+		switch msgs[i].Kind {
+		case MsgPut:
+			return applyUpsertChain(msgs[i].Value, true, fns)
+		case MsgDelete:
+			if len(fns) > 0 {
+				return applyUpsertChain(*new(V), false, fns)
 			}
+			var zero V
+			return zero, false
+		case MsgUpsert:
+			fns = append(fns, msgs[i].Fn)
 		}
 	}
 
 	childIdx := n.findChildIndex(key, t.cmp)
-	return t.getFromNode(n.children[childIdx], key)
+	return t.getWithUpserts(n.children[childIdx], key, fns)
+}
+
+// applyUpsertChain applies collected upsert functions to a base value.
+// Functions are in newest-first order; they are applied oldest-first (reverse).
+func applyUpsertChain[V any](base V, exists bool, fns []UpsertFn[V]) (V, bool) {
+	if len(fns) == 0 {
+		return base, exists
+	}
+	for i := len(fns) - 1; i >= 0; i-- {
+		if exists {
+			base = fns[i](&base, true)
+		} else {
+			base = fns[i](nil, false)
+			exists = true
+		}
+	}
+	return base, true
 }
 
 // Delete removes key from the tree. Returns true if the key existed.
@@ -223,7 +252,7 @@ func (t *BETree[K, V]) deleteLocked(key K) bool {
 	}
 	t.size--
 	t.pendingDeletes++
-	t.root.buffer = append(t.root.buffer, Message[K, V]{Kind: MsgDelete, Key: key})
+	t.root.appendToBuffer(Message[K, V]{Kind: MsgDelete, Key: key}, t.cmp)
 	if len(t.root.buffer) > t.params.bufferCap {
 		t.flushNode(t.root)
 		if len(t.root.children) > t.params.fanout {
@@ -266,9 +295,9 @@ func (t *BETree[K, V]) Close() error {
 }
 
 // DeleteRange removes all keys in [lo, hi). Returns the count removed.
-// Keys are collected eagerly from leaves and buffers, deduplicated, verified,
-// and deleted individually. This is correct for in-memory trees; a disk-backed
-// tree would buffer MsgDeleteRange messages instead.
+// Keys in the range are collected via a read-only traversal, then buffered
+// as individual MsgDelete entries at the root. This gives O(K) insertion
+// time (K = keys in range) with the benefit of batched flush to leaves.
 func (t *BETree[K, V]) DeleteRange(lo, hi K) int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -277,63 +306,78 @@ func (t *BETree[K, V]) DeleteRange(lo, hi K) int {
 		return 0
 	}
 
-	// Collect all candidate keys that appear anywhere in the tree within [lo, hi).
-	var candidates []K
-	t.collectCandidateKeys(t.root, lo, hi, &candidates)
+	// Direct leaf path: apply immediately when root is a leaf.
+	if t.root.leaf {
+		count := 0
+		for i := len(t.root.keys) - 1; i >= 0; i-- {
+			if t.cmp(t.root.keys[i], lo) >= 0 && t.cmp(t.root.keys[i], hi) < 0 {
+				t.root.keys = slices.Delete(t.root.keys, i, i+1)
+				t.root.values = slices.Delete(t.root.values, i, i+1)
+				count++
+			}
+		}
+		t.size -= count
+		return count
+	}
 
-	// Sort and deduplicate so each key is attempted at most once.
-	slices.SortFunc(candidates, t.cmp)
-	candidates = slices.CompactFunc(candidates, func(a, b K) bool {
-		return t.cmp(a, b) == 0
-	})
+	// Collect live keys in range via the iterator infrastructure.
+	var entries []mergeEntry[K, V]
+	t.collectRange(t.root, lo, hi, true, false, 0, &entries)
+	pairs := t.resolveEntries(entries)
+	if len(pairs) == 0 {
+		return 0
+	}
 
-	count := 0
-	for _, key := range candidates {
-		if t.deleteLocked(key) {
-			count++
+	// Buffer individual deletes for each live key.
+	count := len(pairs)
+	t.size -= count
+	t.pendingDeletes += count
+	for _, p := range pairs {
+		t.root.appendToBuffer(Message[K, V]{
+			Kind: MsgDelete, Key: p.key,
+		}, t.cmp)
+	}
+	if len(t.root.buffer) > t.params.bufferCap {
+		t.flushNode(t.root)
+		if len(t.root.children) > t.params.fanout {
+			t.splitRoot()
 		}
 	}
 	return count
 }
 
-// collectCandidateKeys appends all keys from leaves and MsgPut buffer entries
-// that fall within [lo, hi). The result may contain duplicates.
-func (t *BETree[K, V]) collectCandidateKeys(n *node[K, V], lo, hi K, out *[]K) {
-	if n.leaf {
-		for _, k := range n.keys {
-			if t.cmp(k, lo) >= 0 && t.cmp(k, hi) < 0 {
-				*out = append(*out, k)
-			}
-		}
-		return
-	}
-	for i := range n.buffer {
-		if n.buffer[i].Kind == MsgPut &&
-			t.cmp(n.buffer[i].Key, lo) >= 0 &&
-			t.cmp(n.buffer[i].Key, hi) < 0 {
-			*out = append(*out, n.buffer[i].Key)
-		}
-	}
-	for _, child := range n.children {
-		t.collectCandidateKeys(child, lo, hi, out)
-	}
-}
-
 // Upsert applies fn atomically to the value at key. If the key exists, fn
 // receives a pointer to the current value and exists=true. Otherwise fn
 // receives nil and exists=false. The returned value is stored.
+//
+// The function is buffered as a MsgUpsert message and resolved lazily when
+// the message reaches a leaf during flush, matching the B-epsilon-tree design.
 func (t *BETree[K, V]) Upsert(key K, fn UpsertFn[V]) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	v, exists := t.getFromNode(t.root, key)
-	var newVal V
-	if exists {
-		newVal = fn(&v, true)
-	} else {
-		newVal = fn(nil, false)
+	if t.root.leaf {
+		i, found := t.root.leafSearch(key, t.cmp)
+		if found {
+			t.root.values[i] = fn(&t.root.values[i], true)
+		} else {
+			newVal := fn(nil, false)
+			t.root.leafInsert(key, newVal, t.cmp)
+			t.size++
+		}
+		if len(t.root.keys) > t.params.leafCap {
+			t.splitRoot()
+		}
+		return
 	}
-	t.putLocked(key, newVal, !exists)
+
+	t.root.appendToBuffer(Message[K, V]{Kind: MsgUpsert, Key: key, Fn: fn}, t.cmp)
+	if len(t.root.buffer) > t.params.bufferCap {
+		t.flushNode(t.root)
+		if len(t.root.children) > t.params.fanout {
+			t.splitRoot()
+		}
+	}
 }
 
 // PutIfAbsent inserts value only if key does not exist. Returns true if inserted.

@@ -170,7 +170,7 @@ func BenchmarkCompare_Range(b *testing.B) {
 
 // --- Mixed (80% Read, 20% Write, 100K keys) ---
 
-func BenchmarkCompare_Mixed(b *testing.B) {
+func BenchmarkCompare_MixedReadHeavy(b *testing.B) {
 	const n = 100_000
 
 	ft, _ := fractaltree.New[int, int]()
@@ -200,6 +200,47 @@ func BenchmarkCompare_Mixed(b *testing.B) {
 		for range b.N {
 			for i, k := range keys {
 				if i%5 == 0 {
+					gt.ReplaceOrInsert(kv{key: k, value: k + 1})
+				} else {
+					gt.Get(kv{key: k})
+				}
+			}
+		}
+	})
+}
+
+// --- Mixed (80% Write, 20% Read, 100K keys) ---
+
+func BenchmarkCompare_MixedWriteHeavy(b *testing.B) {
+	const n = 100_000
+
+	ft, _ := fractaltree.New[int, int]()
+	gt := btree.New(32)
+	for i := range n {
+		ft.Put(i, i)
+		gt.ReplaceOrInsert(kv{key: i, value: i})
+	}
+	keys := rand.Perm(n)
+
+	b.Run("FractalTree", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			for i, k := range keys {
+				if i%5 < 4 {
+					ft.Put(k, k+1)
+				} else {
+					ft.Get(k)
+				}
+			}
+		}
+	})
+	b.Run("GoogleBTree", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			for i, k := range keys {
+				if i%5 < 4 {
 					gt.ReplaceOrInsert(kv{key: k, value: k + 1})
 				} else {
 					gt.Get(kv{key: k})

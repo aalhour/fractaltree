@@ -13,11 +13,92 @@ type node[K any, V any] struct {
 	pivots       []K
 	children     []*node[K, V]
 	buffer       []Message[K, V]
+	bufferSorted bool              // true when buffer is sorted by key
 	flushBuckets [][]Message[K, V] // reused across flushes to avoid per-flush allocations
 
 	// Leaf node fields.
 	keys   []K
 	values []V
+}
+
+// sortBuffer sorts the buffer by key using stable sort, then marks it sorted.
+// Caller must hold the tree write lock.
+func (n *node[K, V]) sortBuffer(cmp func(K, K) int) {
+	if n.bufferSorted || len(n.buffer) <= 1 {
+		return
+	}
+	slices.SortStableFunc(n.buffer, func(a, b Message[K, V]) int {
+		return cmp(a.Key, b.Key)
+	})
+	n.bufferSorted = true
+}
+
+// appendToBuffer inserts a message at its sorted position, maintaining the
+// sorted invariant. Caller must hold the tree write lock.
+func (n *node[K, V]) appendToBuffer(msg Message[K, V], cmp func(K, K) int) {
+	if !n.bufferSorted || len(n.buffer) == 0 {
+		n.buffer = append(n.buffer, msg)
+		n.bufferSorted = len(n.buffer) <= 1
+		if !n.bufferSorted {
+			n.sortBuffer(cmp)
+		}
+		return
+	}
+	// Insert at sorted position. Same-key messages go after existing ones
+	// (newest last) by using <= 0 comparison.
+	pos, _ := slices.BinarySearchFunc(n.buffer, msg.Key, func(m Message[K, V], k K) int {
+		return cmp(m.Key, k)
+	})
+	// Find the end of the key group to insert after all existing same-key msgs.
+	for pos < len(n.buffer) && cmp(n.buffer[pos].Key, msg.Key) == 0 {
+		pos++
+	}
+	n.buffer = slices.Insert(n.buffer, pos, msg)
+}
+
+// bufferMessagesForKey returns all messages for key in the sorted buffer.
+// Within the returned slice, messages are in insertion order (oldest first).
+func (n *node[K, V]) bufferMessagesForKey(key K, cmp func(K, K) int) []Message[K, V] {
+	i, found := slices.BinarySearchFunc(n.buffer, key, func(m Message[K, V], k K) int {
+		return cmp(m.Key, k)
+	})
+	if !found {
+		return nil
+	}
+	end := i + 1
+	for end < len(n.buffer) && cmp(n.buffer[end].Key, key) == 0 {
+		end++
+	}
+	return n.buffer[i:end]
+}
+
+// bufferSlice returns the sub-slice of the sorted buffer containing messages
+// whose keys fall in the range defined by lo/hi with inclusivity flags.
+// The buffer must already be sorted.
+func (n *node[K, V]) bufferSlice(lo, hi K, loInc, hiInc bool, cmp func(K, K) int) []Message[K, V] {
+	if len(n.buffer) == 0 {
+		return nil
+	}
+	start, _ := slices.BinarySearchFunc(n.buffer, lo, func(m Message[K, V], k K) int {
+		return cmp(m.Key, k)
+	})
+	if !loInc {
+		for start < len(n.buffer) && cmp(n.buffer[start].Key, lo) == 0 {
+			start++
+		}
+	}
+	end, _ := slices.BinarySearchFunc(n.buffer, hi, func(m Message[K, V], k K) int {
+		return cmp(m.Key, k)
+	})
+	if hiInc {
+		for end < len(n.buffer) && cmp(n.buffer[end].Key, hi) == 0 {
+			end++
+		}
+	}
+	if start >= end {
+		return nil
+	}
+	return n.buffer[start:end]
 }
 
 // newLeaf creates an empty leaf node with preallocated capacity.
