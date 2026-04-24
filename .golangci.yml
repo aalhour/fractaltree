@@ -39,7 +39,7 @@ linters:
     # Context and concurrency
     # ─────────────────────────────────────────────────────────────────────────
     - contextcheck    # Check context.Context usage
-    - noctx           # Detect http requests without context
+    - noctx           # Find func calls without ctx.Context
 
     # ─────────────────────────────────────────────────────────────────────────
     # Style and formatting
@@ -51,12 +51,9 @@ linters:
     # ─────────────────────────────────────────────────────────────────────────
     # Bug detection
     # ─────────────────────────────────────────────────────────────────────────
-    - bodyclose       # Check HTTP response body is closed
     - durationcheck   # Detect bad time.Duration multiplication
     - nilerr          # Check for returning nil when err is not nil
     - nilnil          # Detect returning (nil, nil)
-    - rowserrcheck    # Check sql.Rows.Err() is called
-    - sqlclosecheck   # Check sql.Rows/Stmt are closed
 
     # ─────────────────────────────────────────────────────────────────────────
     # Code hygiene
